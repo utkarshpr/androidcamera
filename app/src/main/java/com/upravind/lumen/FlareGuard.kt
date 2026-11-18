@@ -17,8 +17,8 @@ import androidx.camera.core.ImageProxy
  */
 object FlareGuard {
     class Stats(val veil: Float, val brightFraction: Float) {
-        /** Show the "flare" warning when blacks are lifted AND a strong light source is in view. */
-        val flaring get() = veil > 0.10f && brightFraction > 0.003f
+        /** Show the "flare" warning when a strong light source is in view (or when blacks are lifted and a light is near). */
+        val flaring get() = brightFraction > 0.004f || (veil > 0.10f && brightFraction > 0.001f)
     }
 
     /** Measure from a luma (Y) plane. Cheap: samples every 8th pixel. */

@@ -12,6 +12,8 @@ Manual camera built with Kotlin, Jetpack Compose and CameraX.
   tips. Presets set look, strength, grid, crop ratio, burst, steady wait, manual ISO/shutter and exposure bias.
   Presets that need STARS / NIGHT / PANO / TRAIL modes apply their look and say the mode isn't available yet.
 - `tools/gen_from_ios.py` regenerates `LookData.kt` and `PresetData.kt` from the iPhone sources
+- **Live look preview**: colour, vignette, grain, light leaks, pixel, CRT scanlines, frosted glass and neon edges are drawn live (Android 13+)
+- Volume-button shutter, 3 / 10 s timer, live histogram, 4K / 1080p, 30 / 60 fps and HDR video options, photos → PDF (1, 2 or 4 per page), long exposure and light-trail stacking
 - **Night mode**: shoots a burst for 3 / 6 / 10 s, aligns the frames and averages them (cleaner, brighter low-light photos)
 - **RAW**: saves a DNG plus a JPEG (RAW turns video and the flare watcher off while it is on)
 - **Flare Fix**: removes the milky veil caused by lens flare, plus a live "flare detected" warning

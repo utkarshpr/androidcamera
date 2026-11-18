@@ -31,6 +31,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import android.graphics.ColorMatrixColorFilter
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.pow
 import kotlin.math.roundToInt
 
@@ -39,9 +42,24 @@ private val Panel = Color(0xFF16161A)
 
 class MainActivity : ComponentActivity() {
     private var controller: CameraController? = null
+    private var shutterHook: (() -> Unit)? = null
+    private val pendingLook = mutableStateOf<String?>(null)     // lets `adb shell am start --es look NAME` pick a look (used for testing)
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        intent.getStringExtra("look")?.let { pendingLook.value = it }
+    }
+
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
+        if ((keyCode == android.view.KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP) && event?.repeatCount == 0) {
+            shutterHook?.invoke(); return true     // volume buttons work as a shutter
+        }
+        return super.onKeyDown(keyCode, event)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        intent.getStringExtra("look")?.let { pendingLook.value = it }
         setContent { MaterialTheme(colorScheme = darkColorScheme(primary = Gold)) { Root() } }
     }
 
@@ -79,13 +97,42 @@ class MainActivity : ComponentActivity() {
         var grid by remember { mutableStateOf(1) }
         var ratio by remember { mutableStateOf<String?>(null) }
         var previewView by remember { mutableStateOf<PreviewView?>(null) }
+        var timer by remember { mutableStateOf(0) }
+        var countdown by remember { mutableStateOf<Int?>(null) }
+        var pdfPicked by remember { mutableStateOf<List<android.net.Uri>>(emptyList()) }
+        val scope = rememberCoroutineScope()
+        val pdfPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
+            if (uris.isNotEmpty()) pdfPicked = uris.take(64)
+        }
+        fun fire() {
+            if (videoMode) cam.toggleRecording()
+            else if (cam.longMode > 0) cam.takeStack(cam.longMode)
+            else if (cam.nightMode) cam.takeNight()
+            else cam.takePhoto()
+        }
+        fun shutter() {
+            if (cam.busy && countdown == null) return
+            if (countdown != null) { countdown = null; return }       // tap again cancels the countdown
+            if (timer > 0 && !cam.isRecording) {
+                scope.launch {
+                    var n = timer
+                    while (n > 0) { countdown = n; delay(1000); if (countdown == null) return@launch; n-- }
+                    countdown = null
+                    fire()
+                }
+            } else fire()
+        }
+        DisposableEffect(Unit) { shutterHook = { shutter() }; onDispose { shutterHook = null } }
 
         // live look on the preview (TextureView-backed preview takes a colour filter)
-        LaunchedEffect(look, strength, previewView) {
+        LaunchedEffect(pendingLook.value) { pendingLook.value?.let { look = Looks.byName(it); strength = 1f; presetName = null } }
+        var grainTick by remember { mutableStateOf(0f) }
+        val animated = look.spec.grain > 0f || cam.extras.grain > 0f
+        LaunchedEffect(animated) { while (animated) { delay(120); grainTick = (grainTick + 1f) % 97f } }
+        LaunchedEffect(look, strength, previewView, cam.extras, grainTick) {
             cam.look = look; cam.strength = strength
             val v = previewView ?: return@LaunchedEffect
-            val paint = Paint().apply { colorFilter = ColorMatrixColorFilter(look.matrix(strength)) }
-            v.setLayerType(View.LAYER_TYPE_HARDWARE, paint)
+            v.post { PreviewFx.apply(v, look, strength, cam.extras, grainTick) }
         }
         LaunchedEffect(flareOn) { cam.flareGuard = flareOn }
         val aspect = ratio?.split(":")?.let { (it[1].toFloat() / it[0].toFloat()) } ?: (3f / 4f)
@@ -99,16 +146,34 @@ class MainActivity : ComponentActivity() {
                 Chip("PRESETS", showPresets) { showPresets = !showPresets }
                 Spacer(Modifier.width(8.dp))
                 Chip(if (cam.nightMode) "NIGHT ${cam.nightSeconds}s" else "NIGHT", cam.nightMode) {
-                    if (!cam.nightMode) { if (cam.rawMode) cam.setRaw(false); cam.nightMode = true }
+                    if (!cam.nightMode) { if (cam.rawMode) cam.setRaw(false); cam.longMode = 0; cam.nightMode = true }
                     else if (cam.nightSeconds < 10) cam.nightSeconds = if (cam.nightSeconds == 3) 6 else 10
                     else { cam.nightMode = false; cam.nightSeconds = 3 }
                 }
                 Spacer(Modifier.width(8.dp))
                 Chip("RAW", cam.rawMode) { cam.setRaw(!cam.rawMode); if (cam.rawMode) videoMode = false }
                 Spacer(Modifier.width(8.dp))
+                Chip(when (cam.longMode) { 1 -> "LONG ${cam.longSeconds}s"; 2 -> "TRAIL ${cam.longSeconds}s"; else -> "LONG" }, cam.longMode > 0) {
+                    if (cam.longMode == 0) { if (cam.rawMode) cam.setRaw(false); cam.nightMode = false; cam.longMode = 1 }
+                    else if (cam.longMode == 1) cam.longMode = 2
+                    else cam.longMode = 0
+                }
+                if (cam.longMode > 0) { Spacer(Modifier.width(8.dp)); Chip("TIME", false) { cam.longSeconds = when (cam.longSeconds) { 5 -> 10; 10 -> 20; 20 -> 30; else -> 5 } } }
+                Spacer(Modifier.width(8.dp))
+                Chip(if (timer == 0) "TIMER" else "TIMER ${timer}s", timer > 0) { timer = when (timer) { 0 -> 3; 3 -> 10; else -> 0 } }
+                Spacer(Modifier.width(8.dp))
+                Chip("HIST", cam.showHistogram) { cam.showHistogram = !cam.showHistogram }
+                Spacer(Modifier.width(8.dp))
+                Chip("PDF", false) { pdfPicker.launch("image/*") }
+                Spacer(Modifier.width(8.dp))
                 Chip("FLARE FIX", flareOn) { flareOn = !flareOn }
                 Spacer(Modifier.width(8.dp))
                 Chip("MANUAL", showManual) { showManual = !showManual; cam.setManualMode(showManual) }
+            }
+            if (videoMode) Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Chip(if (cam.videoUhd) "4K" else "1080p", true) { cam.videoUhd = !cam.videoUhd; cam.videoOptionsChanged() }
+                Chip(if (cam.video60) "60 fps" else "30 fps", cam.video60) { cam.video60 = !cam.video60; cam.videoOptionsChanged() }
+                Chip("HDR", cam.videoHdr) { cam.videoHdr = !cam.videoHdr; cam.videoOptionsChanged() }
             }
             if (cam.flareWarning) Text("FLARE — wipe the lens or shade it from the light", color = Color(0xFFFFB454), fontSize = 11.sp, modifier = Modifier.padding(horizontal = 16.dp))
             cam.nightProgress?.let { Text(it, color = Color(0xFF9EC5FF), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp)) }
@@ -133,6 +198,15 @@ class MainActivity : ComponentActivity() {
                         }
                     )
                     GridOverlay(grid)
+                    if (cam.showHistogram) androidx.compose.foundation.Canvas(Modifier.align(Alignment.TopEnd).padding(10.dp).size(width = 120.dp, height = 56.dp)
+                        .background(Color(0x66000000), RoundedCornerShape(8.dp))) {
+                        val bw = size.width / 64f
+                        cam.histogram.forEachIndexed { i, v ->
+                            drawRect(Color.White.copy(alpha = 0.85f), androidx.compose.ui.geometry.Offset(i * bw, size.height * (1f - v)),
+                                androidx.compose.ui.geometry.Size(bw, size.height * v))
+                        }
+                    }
+                    countdown?.let { Text("$it", color = Color.White, fontSize = 96.sp, modifier = Modifier.align(Alignment.Center)) }
                     cam.message?.let { m ->
                         Text(m, color = Color.White, fontSize = 12.sp,
                             modifier = Modifier.align(Alignment.TopCenter).padding(10.dp).background(Color(0xAA000000), RoundedCornerShape(12.dp)).padding(horizontal = 12.dp, vertical = 6.dp))
@@ -172,15 +246,33 @@ class MainActivity : ComponentActivity() {
             // shutter
             Box(Modifier.fillMaxWidth().padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
                 val recording = cam.isRecording
-                Box(Modifier.size(82.dp).background(Panel, CircleShape).clickable(enabled = !cam.busy) {
-                    if (videoMode) cam.toggleRecording() else if (cam.nightMode) cam.takeNight() else cam.takePhoto()
-                }, contentAlignment = Alignment.Center) {
+                Box(Modifier.size(82.dp).background(Panel, CircleShape).clickable { shutter() }, contentAlignment = Alignment.Center) {
                     Box(Modifier.size(if (recording) 30.dp else 62.dp)
                         .background(if (videoMode) Color(0xFFE53935) else Gold, if (recording) RoundedCornerShape(8.dp) else CircleShape))
                 }
             }
         }
 
+        if (pdfPicked.isNotEmpty()) androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pdfPicked = emptyList() },
+            title = { Text("Make PDF from ${pdfPicked.size} photo(s)") },
+            text = { Text("How many pictures on each page?") },
+            confirmButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(1, 2, 4).forEach { n ->
+                        androidx.compose.material3.TextButton(onClick = {
+                            val picked = pdfPicked; pdfPicked = emptyList()
+                            cam.message = "Making PDF…"
+                            Thread {
+                                val uri = try { PdfExport.create(context, picked, n) } catch (e: Throwable) { null }
+                                runOnUiThread { cam.message = if (uri != null) "PDF saved to Documents/Lumen" else "PDF failed" }
+                            }.start()
+                        }) { Text("$n / page") }
+                    }
+                }
+            },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { pdfPicked = emptyList() }) { Text("Cancel") } }
+        )
         if (showPresets) PresetSheet(onClose = { showPresets = false }) { p ->
             look = Looks.byName(p.look); strength = p.strength; grid = p.grid; ratio = p.ratio; presetName = p.name
             val note = cam.applyPreset(p)

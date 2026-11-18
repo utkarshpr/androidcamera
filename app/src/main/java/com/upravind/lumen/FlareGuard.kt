@@ -45,6 +45,21 @@ object FlareGuard {
         return Stats(percentile(hist, n, 0.01f) / 255f, bright.toFloat() / n)
     }
 
+    /** 64-bin luma histogram from a Y plane (every 6th pixel), normalised to 0..1. */
+    fun histogram(image: ImageProxy): FloatArray {
+        val plane = image.planes[0]; val buf = plane.buffer
+        val rs = plane.rowStride; val ps = plane.pixelStride
+        val bins = IntArray(64); var n = 0
+        var y = 0
+        while (y < image.height) {
+            var x = 0
+            while (x < image.width) { bins[(buf.get(y * rs + x * ps).toInt() and 0xFF) shr 2]++; n++; x += 6 }
+            y += 6
+        }
+        val peak = bins.max().coerceAtLeast(1)
+        return FloatArray(64) { bins[it].toFloat() / peak }
+    }
+
     fun measure(bitmap: Bitmap): Stats {
         val w = 256
         val h = (bitmap.height * w / bitmap.width).coerceAtLeast(1)

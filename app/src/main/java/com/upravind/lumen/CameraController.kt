@@ -58,6 +58,14 @@ class CameraController(private val context: Context) {
     var isRecording by mutableStateOf(false)
     var busy by mutableStateOf(false)
     var flareWarning by mutableStateOf(false)
+    var showHistogram by mutableStateOf(false)
+    var histogram by mutableStateOf(FloatArray(64))
+    var videoUhd by mutableStateOf(true)
+    var video60 by mutableStateOf(false)
+    var videoHdr by mutableStateOf(false)
+
+    /** Applies the video options by rebuilding the camera session. */
+    fun videoOptionsChanged() { val o = boundOwner; val v = boundView; if (o != null && v != null) bind(o, v) }
     var zoom by mutableStateOf(1f)
     var minZoom by mutableStateOf(0.6f)
     var maxZoom by mutableStateOf(10f)
@@ -65,7 +73,7 @@ class CameraController(private val context: Context) {
     // ---- settings ----
     var look: Look = Looks.all.first()
     var strength = 1f
-    var extras = Extras()
+    var extras by mutableStateOf(Extras())
     var ratio: String? = null          // "1:1", "3:2", "16:9"… null = camera default (4:3)
     var frame = false
     var burst = false
@@ -121,22 +129,32 @@ class CameraController(private val context: Context) {
             }
             // Remember what auto exposure is doing, so MANUAL starts from a correctly exposed picture instead of a black one.
             androidx.camera.camera2.interop.Camera2Interop.Extender(previewBuilder).setSessionCaptureCallback(aeWatcher)
+            if (videoHdr && !rawMode) previewBuilder.setDynamicRange(androidx.camera.core.DynamicRange.HLG_10_BIT)
             val preview = previewBuilder.build().also { it.setSurfaceProvider(view.surfaceProvider) }
             val captureBuilder = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
             if (rawMode) captureBuilder.setOutputFormat(ImageCapture.OUTPUT_FORMAT_RAW_JPEG)
             val capture = captureBuilder.build()
-            val recorder = Recorder.Builder().setQualitySelector(QualitySelector.from(Quality.UHD, androidx.camera.video.FallbackStrategy.lowerQualityOrHigherThan(Quality.FHD))).build()
-            val video = VideoCapture.withOutput(recorder)
+            val wanted = if (videoUhd) Quality.UHD else Quality.FHD
+            val recorder = Recorder.Builder().setQualitySelector(QualitySelector.from(wanted, androidx.camera.video.FallbackStrategy.lowerQualityOrHigherThan(Quality.HD))).build()
+            val videoBuilder = VideoCapture.Builder(recorder)
+            if (video60) videoBuilder.setTargetFrameRate(Range(60, 60))
+            if (videoHdr) videoBuilder.setDynamicRange(androidx.camera.core.DynamicRange.HLG_10_BIT)
+            val video = videoBuilder.build()
+            var frame = 0
             val analysis = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
                 .also { androidx.camera.camera2.interop.Camera2Interop.Extender(it).setSessionCaptureCallback(aeWatcher) }
                 .build()
-            var frame = 0
             analysis.setAnalyzer(analysisExecutor) { img: ImageProxy ->
-                if (flareWatch && ++frame % 10 == 0) {
+                frame++
+                if (flareWatch && frame % 10 == 0) {
                     val flaring = FlareGuard.measure(img).flaring
                     mainExecutor.execute { if (flareWarning != flaring) flareWarning = flaring }
+                }
+                if (showHistogram && frame % 4 == 0) {
+                    val h = FlareGuard.histogram(img)
+                    mainExecutor.execute { histogram = h }
                 }
                 img.close()
             }
@@ -157,6 +175,7 @@ class CameraController(private val context: Context) {
             } catch (e: Exception) {
                 message = "Camera error: ${e.message}"
                 if (rawMode) { rawMode = false; message = "RAW can't run on this camera setup (${e.message})"; bind(owner, view) }
+                else if (videoHdr || video60) { videoHdr = false; video60 = false; message = "This HDR / 60 fps setup isn't supported with photo — back to standard"; bind(owner, view) }
             }
         }, mainExecutor)
     }
@@ -313,20 +332,28 @@ class CameraController(private val context: Context) {
      * Night mode: shoots as many frames as fit in [nightSeconds], lines them up (hand shake) and averages them.
      * Averaging N frames cuts noise by about sqrt(N), so the picture can be brightened without grain.
      */
-    fun takeNight() {
+    fun takeNight() = takeStack(0)
+
+    var longMode by mutableStateOf(0)        // 0 off, 1 smooth (average), 2 light trails (lighten)
+    var longSeconds by mutableStateOf(10)
+
+    /** kind 0 = night (aligned average), 1 = long exposure average (tripod), 2 = light trails (tripod, lighten). */
+    fun takeStack(kind: Int) {
         val capture = imageCapture ?: return
         if (busy) return
         busy = true
         val cam = camera
         val ev = cam?.cameraInfo?.exposureState
         val oldIndex = exposureIndex
-        if (!manual && ev != null && ev.isExposureCompensationSupported) {
+        if (kind == 0 && !manual && ev != null && ev.isExposureCompensationSupported) {
             val step = ev.exposureCompensationStep.toFloat().coerceAtLeast(0.01f)
             cam.cameraControl.setExposureCompensationIndex((1.0f / step).roundToInt().coerceIn(ev.exposureCompensationRange.lower, ev.exposureCompensationRange.upper))
         }
         val startTime = System.currentTimeMillis()
-        val maxFrames = 16
-        val stacker = NightStacker()
+        val maxFrames = if (kind == 0) 16 else 40
+        val seconds = if (kind == 0) nightSeconds else longSeconds
+        val label = when (kind) { 0 -> "NIGHT"; 1 -> "LONG EXPOSURE"; else -> "LIGHT TRAIL" }
+        val stacker = NightStacker(align = kind == 0, lighten = kind == 2)
         var rotation = 0
 
         fun finishStack() {
@@ -339,7 +366,7 @@ class CameraController(private val context: Context) {
                         result.recycle(); result = rotated
                     }
                     // night tone: lift the shadows a little and keep colour
-                    val tone = android.graphics.ColorMatrix().apply {
+                    val tone = if (kind != 0) null else android.graphics.ColorMatrix().apply {
                         setSaturation(1.1f)
                         postConcat(android.graphics.ColorMatrix(floatArrayOf(
                             1.12f, 0f, 0f, 0f, 14f, 0f, 1.12f, 0f, 0f, 14f, 0f, 0f, 1.12f, 0f, 14f, 0f, 0f, 0f, 1f, 0f)))
@@ -347,7 +374,7 @@ class CameraController(private val context: Context) {
                     val out = finish(result, tone)
                     val uri = save(out)
                     out.recycle()
-                    mainExecutor.execute { nightProgress = null; busy = false; message = if (uri != null) "Night photo saved (${stacker.frames} frames)" else "Could not save night photo" }
+                    mainExecutor.execute { nightProgress = null; busy = false; message = if (uri != null) "$label photo saved (${stacker.frames} frames)" else "Could not save photo" }
                 } catch (e: Throwable) {
                     mainExecutor.execute { nightProgress = null; busy = false; message = "Night failed: ${e.message}" }
                 } finally {
@@ -365,14 +392,14 @@ class CameraController(private val context: Context) {
                         image.close()
                         stacker.add(bmp)
                         bmp.recycle()
-                        mainExecutor.execute { nightProgress = "NIGHT · hold still · ${stacker.frames} frames" }
+                        mainExecutor.execute { nightProgress = "$label · ${if (kind == 0) "hold still" else "keep on a tripod"} · ${stacker.frames} frames" }
                     } catch (e: Throwable) {
                         try { image.close() } catch (_: Exception) {}
-                        mainExecutor.execute { nightProgress = null; busy = false; message = "Night failed: ${e.message}" }
+                        mainExecutor.execute { nightProgress = null; busy = false; message = "$label failed: ${e.message}" }
                         return
                     }
                     val elapsed = System.currentTimeMillis() - startTime
-                    if (elapsed < nightSeconds * 1000L && stacker.frames < maxFrames) next() else finishStack()
+                    if (elapsed < seconds * 1000L && stacker.frames < maxFrames) next() else finishStack()
                 }
                 override fun onError(e: ImageCaptureException) {
                     if (stacker.frames >= 2) finishStack()
@@ -380,7 +407,7 @@ class CameraController(private val context: Context) {
                 }
             })
         }
-        nightProgress = "NIGHT · hold still"
+        nightProgress = "$label · starting"
         next()
     }
 

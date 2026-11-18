@@ -5,7 +5,7 @@ import kotlin.math.abs
 import kotlin.math.min
 
 /** Aligns frames to the first one (translation only) and keeps a running per-pixel sum. */
-class NightStacker {
+class NightStacker(private val align: Boolean = true, private val lighten: Boolean = false) {
     private var w = 0
     private var h = 0
     private var acc: IntArray? = null
@@ -57,9 +57,8 @@ class NightStacker {
         if (acc == null) {
             w = bw; h = bh
             acc = IntArray(w * h * 3)
-            refCoarse = luma(px, w, h, 16)
-            refFine = luma(px, w, h, 4)
-        } else {
+            if (align) { refCoarse = luma(px, w, h, 16); refFine = luma(px, w, h, 4) }
+        } else if (align) {
             val coarse = luma(px, w, h, 16)
             val (cx, cy) = search(refCoarse!!, coarse, w / 16, h / 16, 0, 0, 6)
             val fine = luma(px, w, h, 4)
@@ -73,9 +72,9 @@ class NightStacker {
                 val sx = (x + dx).coerceIn(0, w - 1)
                 val c = px[sy * w + sx]
                 val i = (y * w + x) * 3
-                a[i] += (c shr 16) and 0xFF
-                a[i + 1] += (c shr 8) and 0xFF
-                a[i + 2] += c and 0xFF
+                val r = (c shr 16) and 0xFF; val g = (c shr 8) and 0xFF; val b = c and 0xFF
+                if (lighten) { if (r > a[i]) a[i] = r; if (g > a[i + 1]) a[i + 1] = g; if (b > a[i + 2]) a[i + 2] = b }
+                else { a[i] += r; a[i + 1] += g; a[i + 2] += b }
             }
         }
         frames++
@@ -83,7 +82,7 @@ class NightStacker {
 
     fun result(): Bitmap {
         val a = acc ?: throw IllegalStateException("no frames")
-        val n = frames
+        val n = if (lighten) 1 else frames
         val out = IntArray(w * h)
         for (i in 0 until w * h) {
             val j = i * 3

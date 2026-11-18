@@ -26,6 +26,8 @@ uniform float grain;
 uniform float leak;
 uniform float neon;
 uniform float t;
+uniform float peak;
+uniform float zebra;
 float hash(float2 p) { return fract(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453); }
 float luma(half3 c) { return dot(c, half3(0.299, 0.587, 0.114)); }
 half3 blob(half3 c, float2 uv, float2 center, float r, half3 color, float a) {
@@ -65,11 +67,21 @@ half4 main(float2 p) {
         float n = hash(floor(p / 2.0) + t) - 0.5;
         c.rgb += half3(n * grain * 0.35);
     }
+    if (peak > 0.5) {
+        float p0 = luma(c.rgb);
+        float p1 = luma(content.eval(p + float2(2.0, 0.0)).rgb);
+        float p2 = luma(content.eval(p + float2(0.0, 2.0)).rgb);
+        float pe = abs(p0 - p1) + abs(p0 - p2);
+        if (pe > 0.22) { c.rgb = mix(c.rgb, half3(1.0, 0.15, 0.1), 0.85); }
+    }
+    if (zebra > 0.5 && luma(c.rgb) > 0.94) {
+        if (mod(floor((p.x + p.y) / 9.0), 2.0) < 1.0) { c.rgb = half3(0.05, 0.05, 0.05); }
+    }
     return c;
 }
 """
 
-    fun apply(view: View, look: Look, strength: Float, extras: Extras, t: Float) {
+    fun apply(view: View, look: Look, strength: Float, extras: Extras, t: Float, peaking: Boolean = false, zebra: Boolean = false) {
         val cf = ColorMatrixColorFilter(look.matrix(strength))
         val spec = look.spec
         if (Build.VERSION.SDK_INT < 33) {
@@ -84,7 +96,7 @@ half4 main(float2 p) {
         val grain = min(1f, spec.grain + extras.grain)
         val neon = if (spec.fx == 4) 1f else 0f
         var effect = RenderEffect.createColorFilterEffect(cf)
-        if (vig > 0f || scan > 0f || pix > 0f || grain > 0f || extras.leak > 0 || neon > 0f) {
+        if (vig > 0f || scan > 0f || pix > 0f || grain > 0f || extras.leak > 0 || neon > 0f || peaking || zebra) {
             val shader = RuntimeShader(AGSL)
             shader.setFloatUniform("size", w, h)
             shader.setFloatUniform("vig", vig)
@@ -94,6 +106,8 @@ half4 main(float2 p) {
             shader.setFloatUniform("leak", extras.leak.toFloat())
             shader.setFloatUniform("neon", neon)
             shader.setFloatUniform("t", t)
+            shader.setFloatUniform("peak", if (peaking) 1f else 0f)
+            shader.setFloatUniform("zebra", if (zebra) 1f else 0f)
             effect = RenderEffect.createChainEffect(effect, RenderEffect.createRuntimeShaderEffect(shader, "content"))
         }
         if (spec.fx == 2) effect = RenderEffect.createChainEffect(effect, RenderEffect.createBlurEffect(16f, 16f, Shader.TileMode.CLAMP))

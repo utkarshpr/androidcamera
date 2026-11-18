@@ -59,6 +59,11 @@ class CameraController(private val context: Context) {
     var busy by mutableStateOf(false)
     var flareWarning by mutableStateOf(false)
     var showHistogram by mutableStateOf(false)
+    var peaking by mutableStateOf(false)
+    var zebra by mutableStateOf(false)
+    var showLevel by mutableStateOf(false)
+    /** 0 auto, then daylight, cloudy, incandescent, fluorescent, shade */
+    var wbMode by mutableStateOf(0)
     var histogram by mutableStateOf(FloatArray(64))
     var videoUhd by mutableStateOf(true)
     var video60 by mutableStateOf(false)
@@ -227,6 +232,10 @@ class CameraController(private val context: Context) {
         } else {
             builder.setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
         }
+        val awb = when (wbMode) { 1 -> CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT; 2 -> CaptureRequest.CONTROL_AWB_MODE_CLOUDY_DAYLIGHT
+            3 -> CaptureRequest.CONTROL_AWB_MODE_INCANDESCENT; 4 -> CaptureRequest.CONTROL_AWB_MODE_FLUORESCENT; 5 -> CaptureRequest.CONTROL_AWB_MODE_SHADE
+            else -> CaptureRequest.CONTROL_AWB_MODE_AUTO }
+        builder.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, awb)
         if (focusManual) {
             builder.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
             builder.setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, focusDiopters)

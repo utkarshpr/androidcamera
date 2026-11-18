@@ -11,6 +11,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.asImageBitmap
@@ -135,15 +137,48 @@ class MainActivity : ComponentActivity() {
         var grainTick by remember { mutableStateOf(0f) }
         val animated = look.spec.grain > 0f || cam.extras.grain > 0f
         LaunchedEffect(animated) { while (animated) { delay(120); grainTick = (grainTick + 1f) % 97f } }
-        LaunchedEffect(look, strength, previewView, cam.extras, grainTick) {
+        LaunchedEffect(look, strength, previewView, cam.extras, grainTick, cam.peaking, cam.zebra) {
             cam.look = look; cam.strength = strength
             val v = previewView ?: return@LaunchedEffect
-            v.post { PreviewFx.apply(v, look, strength, cam.extras, grainTick) }
+            v.post { PreviewFx.apply(v, look, strength, cam.extras, grainTick, cam.peaking, cam.zebra) }
         }
         LaunchedEffect(flareOn) { cam.flareGuard = flareOn }
         val aspect = ratio?.split(":")?.let { (it[1].toFloat() / it[0].toFloat()) } ?: (3f / 4f)
 
         var showTools by remember { mutableStateOf(false) }
+        // level / horizon indicator from the gravity sensor
+        var roll by remember { mutableStateOf(0f) }
+        DisposableEffect(cam.showLevel) {
+            val sm = context.getSystemService(android.content.Context.SENSOR_SERVICE) as android.hardware.SensorManager
+            val sensor = sm.getDefaultSensor(android.hardware.Sensor.TYPE_ACCELEROMETER)
+            val listener = object : android.hardware.SensorEventListener {
+                override fun onSensorChanged(e: android.hardware.SensorEvent) {
+                    roll = Math.toDegrees(kotlin.math.atan2(e.values[0].toDouble(), e.values[1].toDouble())).toFloat()
+                }
+                override fun onAccuracyChanged(s: android.hardware.Sensor?, a: Int) {}
+            }
+            if (cam.showLevel && sensor != null) sm.registerListener(listener, sensor, android.hardware.SensorManager.SENSOR_DELAY_UI)
+            onDispose { sm.unregisterListener(listener) }
+        }
+        // last photo thumbnail (opens the gallery)
+        var lastThumb by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+        var lastUri by remember { mutableStateOf<android.net.Uri?>(null) }
+        LaunchedEffect(cam.message) {
+            if (cam.message == null || cam.message?.contains("saved", ignoreCase = true) == true || lastThumb == null) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    try {
+                        context.contentResolver.query(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, arrayOf(android.provider.MediaStore.Images.Media._ID),
+                            "${android.provider.MediaStore.Images.Media.RELATIVE_PATH} LIKE ?", arrayOf("%Lumen%"), "${android.provider.MediaStore.Images.Media.DATE_ADDED} DESC")?.use { c ->
+                            if (c.moveToFirst()) {
+                                val uri = android.content.ContentUris.withAppendedId(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, c.getLong(0))
+                                lastUri = uri
+                                lastThumb = context.contentResolver.loadThumbnail(uri, android.util.Size(160, 160), null)
+                            }
+                        }
+                    } catch (_: Throwable) {}
+                }
+            }
+        }
         // small square snapshot of the live camera, used to show every look on the real scene
         var thumbSource by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
         LaunchedEffect(previewView) {
@@ -202,6 +237,18 @@ class MainActivity : ComponentActivity() {
                         }
                     )
                     GridOverlay(grid)
+                    if (cam.showLevel) {
+                        val level = kotlin.math.abs(roll) < 1.2f || kotlin.math.abs(kotlin.math.abs(roll) - 90f) < 1.2f || kotlin.math.abs(kotlin.math.abs(roll) - 180f) < 1.2f
+                        androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
+                            val c = if (level) Gold else Color.White.copy(alpha = 0.75f)
+                            val cy = size.height / 2; val half = size.width * 0.18f
+                            rotate(-roll, androidx.compose.ui.geometry.Offset(size.width / 2, cy)) {
+                                drawLine(c, androidx.compose.ui.geometry.Offset(size.width / 2 - half, cy), androidx.compose.ui.geometry.Offset(size.width / 2 + half, cy), 2.dp.toPx())
+                            }
+                            drawLine(c.copy(alpha = 0.5f), androidx.compose.ui.geometry.Offset(size.width / 2 - half * 1.4f, cy), androidx.compose.ui.geometry.Offset(size.width / 2 - half * 1.15f, cy), 2.dp.toPx())
+                            drawLine(c.copy(alpha = 0.5f), androidx.compose.ui.geometry.Offset(size.width / 2 + half * 1.15f, cy), androidx.compose.ui.geometry.Offset(size.width / 2 + half * 1.4f, cy), 2.dp.toPx())
+                        }
+                    }
                     // top row: tools · status · flip
                     Row(Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         GlassButton("☰") { showTools = true }
@@ -287,7 +334,14 @@ class MainActivity : ComponentActivity() {
             // ---- bottom bar: presets · shutter · looks toggle
             Row(Modifier.fillMaxWidth().padding(horizontal = 26.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                    GlassTile("PRESETS", showPresets) { showPresets = !showPresets }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        val t = lastThumb
+                        Box(Modifier.size(44.dp).clip(CircleShape).background(Panel).border(1.dp, Color.White.copy(alpha = 0.18f), CircleShape).clickable {
+                            lastUri?.let { u -> try { startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(u, "image/*").addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)) } catch (_: Throwable) {} }
+                        }) { if (t != null) androidx.compose.foundation.Image(t.asImageBitmap(), "last photo", Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop) }
+                        Spacer(Modifier.width(6.dp))
+                        GlassTile("PRESETS", showPresets) { showPresets = !showPresets }
+                    }
                 }
                 val recording = cam.isRecording
                 Box(Modifier.size(86.dp).border(3.dp, Brush.linearGradient(listOf(GoldLight, Gold)), CircleShape).padding(7.dp)
@@ -353,9 +407,9 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun GlassTile(text: String, on: Boolean, onClick: () -> Unit) {
-        Text(text, color = if (on) Color.Black else Color.White.copy(alpha = 0.85f), fontSize = 11.sp, letterSpacing = 1.sp, fontWeight = FontWeight.SemiBold,
+        Text(text, color = if (on) Color.Black else Color.White.copy(alpha = 0.85f), fontSize = 11.sp, letterSpacing = 0.6.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false,
             modifier = Modifier.clip(RoundedCornerShape(16.dp)).background(if (on) Brush.linearGradient(listOf(GoldLight, Gold)) else Brush.linearGradient(listOf(Color(0xFF1B1B21), Color(0xFF131317))))
-                .border(1.dp, Color.White.copy(alpha = if (on) 0f else 0.10f), RoundedCornerShape(16.dp)).clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 12.dp))
+                .border(1.dp, Color.White.copy(alpha = if (on) 0f else 0.10f), RoundedCornerShape(16.dp)).clickable(onClick = onClick).padding(horizontal = 11.dp, vertical = 12.dp))
     }
 
     @Composable
@@ -375,7 +429,7 @@ class MainActivity : ComponentActivity() {
         Box(Modifier.fillMaxSize().background(Color(0x99000000)).clickable(onClick = onClose)) {
             Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
                 .background(Color(0xFF0F0F13)).border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
-                .clickable(enabled = false) {}.navigationBarsPadding().padding(18.dp)) {
+                .clickable(enabled = false) {}.navigationBarsPadding().verticalScroll(androidx.compose.foundation.rememberScrollState()).padding(18.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("TOOLS", color = Gold, fontSize = 13.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.weight(1f))
@@ -390,6 +444,17 @@ class MainActivity : ComponentActivity() {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     ToolTile("GRID", listOf("off", "thirds", "centre", "columns", "diagonal")[grid], grid > 0, Modifier.weight(1f), onGrid)
                     ToolTile("TIMER", if (timer == 0) "off" else "${timer} seconds", timer > 0, Modifier.weight(1f), onTimer)
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    ToolTile("FOCUS PEAKING", if (cam.peaking) "red edges = sharp" else "off", cam.peaking, Modifier.weight(1f)) { cam.peaking = !cam.peaking }
+                    ToolTile("ZEBRA", if (cam.zebra) "stripes = overexposed" else "off", cam.zebra, Modifier.weight(1f)) { cam.zebra = !cam.zebra }
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    ToolTile("LEVEL", if (cam.showLevel) "horizon line" else "off", cam.showLevel, Modifier.weight(1f)) { cam.showLevel = !cam.showLevel }
+                    ToolTile("WHITE BALANCE", listOf("auto", "daylight", "cloudy", "incandescent", "fluorescent", "shade")[cam.wbMode], cam.wbMode > 0, Modifier.weight(1f)) {
+                        cam.wbMode = (cam.wbMode + 1) % 6; cam.applyManual() }
                 }
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {

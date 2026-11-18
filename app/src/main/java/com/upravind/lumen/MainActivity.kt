@@ -141,7 +141,9 @@ class MainActivity : ComponentActivity() {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
             // top bar
             Row(Modifier.fillMaxWidth().horizontalScroll(androidx.compose.foundation.rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Chip(if (videoMode) "VIDEO" else "PHOTO", true) { videoMode = !videoMode; if (videoMode && cam.rawMode) cam.setRaw(false) }
+                Chip(if (videoMode) "VIDEO" else "PHOTO", true) { videoMode = !videoMode; if (videoMode && cam.rawMode) cam.setRaw(false); cam.setVideoMode(videoMode) }
+                Spacer(Modifier.width(8.dp))
+                Chip(if (cam.frontFacing) "SELFIE" else "FLIP", cam.frontFacing) { cam.flipCamera() }
                 Spacer(Modifier.width(8.dp))
                 Chip("PRESETS", showPresets) { showPresets = !showPresets }
                 Spacer(Modifier.width(8.dp))
@@ -151,7 +153,7 @@ class MainActivity : ComponentActivity() {
                     else { cam.nightMode = false; cam.nightSeconds = 3 }
                 }
                 Spacer(Modifier.width(8.dp))
-                Chip("RAW", cam.rawMode) { cam.setRaw(!cam.rawMode); if (cam.rawMode) videoMode = false }
+                Chip("RAW", cam.rawMode) { videoMode = false; cam.videoOnly = false; cam.setRaw(!cam.rawMode) }
                 Spacer(Modifier.width(8.dp))
                 Chip(when (cam.longMode) { 1 -> "LONG ${cam.longSeconds}s"; 2 -> "TRAIL ${cam.longSeconds}s"; else -> "LONG" }, cam.longMode > 0) {
                     if (cam.longMode == 0) { if (cam.rawMode) cam.setRaw(false); cam.nightMode = false; cam.longMode = 1 }
@@ -172,7 +174,7 @@ class MainActivity : ComponentActivity() {
             }
             if (videoMode) Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Chip(if (cam.videoUhd) "4K" else "1080p", true) { cam.videoUhd = !cam.videoUhd; cam.videoOptionsChanged() }
-                Chip(if (cam.video60) "60 fps" else "30 fps", cam.video60) { cam.video60 = !cam.video60; cam.videoOptionsChanged() }
+                if (cam.supports60) Chip(if (cam.video60) "60 fps" else "30 fps", cam.video60) { cam.video60 = !cam.video60; cam.videoOptionsChanged() }
                 Chip("HDR", cam.videoHdr) { cam.videoHdr = !cam.videoHdr; cam.videoOptionsChanged() }
             }
             if (cam.flareWarning) Text("FLARE — wipe the lens or shade it from the light", color = Color(0xFFFFB454), fontSize = 11.sp, modifier = Modifier.padding(horizontal = 16.dp))

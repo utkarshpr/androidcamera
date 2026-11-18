@@ -63,6 +63,9 @@ class CameraController(private val context: Context) {
     var videoUhd by mutableStateOf(true)
     var video60 by mutableStateOf(false)
     var videoHdr by mutableStateOf(false)
+    var fpsRanges by mutableStateOf("")
+    /** The S22 Ultra only offers up to 30 fps to other apps, so the 60 fps chip is hidden unless the camera reports a 60 fps range. */
+    val supports60 get() = fpsRanges.split(", ").any { (it.substringAfter("-").toIntOrNull() ?: 0) >= 60 }
 
     /** Applies the video options by rebuilding the camera session. */
     fun videoOptionsChanged() { val o = boundOwner; val v = boundView; if (o != null && v != null) bind(o, v) }
@@ -99,10 +102,21 @@ class CameraController(private val context: Context) {
         applyManual()
     }
 
-    var frontFacing = false
+    var frontFacing by mutableStateOf(false)
+
+    /** Switches between the back camera and the selfie camera. */
+    fun flipCamera() {
+        frontFacing = !frontFacing
+        rawMode = false
+        zoom = 1f
+        videoOptionsChanged()      // rebinds the session with the other camera
+    }
 
     private var boundOwner: LifecycleOwner? = null
     private var boundView: PreviewView? = null
+    /** In video mode only preview + video are bound: the phone only offers 60 fps / HDR with fewer streams. */
+    var videoOnly by mutableStateOf(false)
+    fun setVideoMode(on: Boolean) { videoOnly = on; if (on && rawMode) rawMode = false; videoOptionsChanged() }
     var rawMode by mutableStateOf(false)
     var rawSupported by mutableStateOf(false)
 
@@ -162,7 +176,9 @@ class CameraController(private val context: Context) {
             try {
                 p.unbindAll()
                 camera = if (rawMode) p.bindToLifecycle(owner, selector, preview, capture)
+                         else if (videoOnly) p.bindToLifecycle(owner, selector, preview, video)
                          else p.bindToLifecycle(owner, selector, preview, capture, video, analysis)
+                fpsRanges = camera!!.cameraInfo.supportedFrameRateRanges.joinToString { "${it.lower}-${it.upper}" }
                 rawSupported = ImageCapture.getImageCaptureCapabilities(camera!!.cameraInfo).supportedOutputFormats
                     .contains(ImageCapture.OUTPUT_FORMAT_RAW_JPEG)
                 imageCapture = capture

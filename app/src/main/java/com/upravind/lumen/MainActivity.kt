@@ -93,7 +93,7 @@ class MainActivity : ComponentActivity() {
                 }
                 Chip("FLARE FIX", flareOn) { flareOn = !flareOn }
                 Spacer(Modifier.width(8.dp))
-                Chip("MANUAL", showManual) { showManual = !showManual; cam.manual = showManual; cam.applyManual() }
+                Chip("MANUAL", showManual) { showManual = !showManual; cam.setManualMode(showManual) }
             }
 
             // viewfinder

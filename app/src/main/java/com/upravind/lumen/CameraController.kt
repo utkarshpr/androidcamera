@@ -74,12 +74,31 @@ class CameraController(private val context: Context) {
     var focusDiopters by mutableStateOf(0f)
     var exposureIndex by mutableStateOf(0)
 
+    @Volatile private var autoIso = 100
+    @Volatile private var autoShutter = 1.0 / 120
+
+    /** Turns manual on/off. Turning it on starts from whatever the auto exposure had just chosen. */
+    fun setManualMode(on: Boolean) {
+        if (on) { iso = autoIso; shutterSeconds = autoShutter.coerceIn(1.0 / 8000, 1.0) }
+        manual = on
+        applyManual()
+    }
+
     var frontFacing = false
 
     fun bind(owner: LifecycleOwner, view: PreviewView) {
         ProcessCameraProvider.getInstance(context).addListener({
             val p = provider ?: ProcessCameraProvider.getInstance(context).get().also { provider = it }
-            val preview = Preview.Builder().build().also { it.setSurfaceProvider(view.surfaceProvider) }
+            val previewBuilder = Preview.Builder()
+            val aeWatcher = object : android.hardware.camera2.CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureCompleted(session: android.hardware.camera2.CameraCaptureSession, request: CaptureRequest, result: android.hardware.camera2.TotalCaptureResult) {
+                    result.get(android.hardware.camera2.CaptureResult.SENSOR_SENSITIVITY)?.let { autoIso = it }
+                    result.get(android.hardware.camera2.CaptureResult.SENSOR_EXPOSURE_TIME)?.let { autoShutter = it / 1e9 }
+                }
+            }
+            // Remember what auto exposure is doing, so MANUAL starts from a correctly exposed picture instead of a black one.
+            androidx.camera.camera2.interop.Camera2Interop.Extender(previewBuilder).setSessionCaptureCallback(aeWatcher)
+            val preview = previewBuilder.build().also { it.setSurfaceProvider(view.surfaceProvider) }
             val capture = ImageCapture.Builder()
                 .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
                 .build()
@@ -88,6 +107,7 @@ class CameraController(private val context: Context) {
             val analysis = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
+                .also { androidx.camera.camera2.interop.Camera2Interop.Extender(it).setSessionCaptureCallback(aeWatcher) }
                 .build()
             var frame = 0
             analysis.setAnalyzer(analysisExecutor) { img: ImageProxy ->

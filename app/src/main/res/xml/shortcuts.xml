@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut android:shortcutId="selfie" android:enabled="true" android:shortcutShortLabel="@string/sc_selfie">
+        <intent android:action="android.intent.action.VIEW" android:targetPackage="com.upravind.lumen" android:targetClass="com.upravind.lumen.MainActivity">
+            <extra android:name="mode" android:value="SELFIE" />
+        </intent>
+    </shortcut>
+    <shortcut android:shortcutId="video" android:enabled="true" android:shortcutShortLabel="@string/sc_video">
+        <intent android:action="android.intent.action.VIEW" android:targetPackage="com.upravind.lumen" android:targetClass="com.upravind.lumen.MainActivity">
+            <extra android:name="mode" android:value="VIDEO" />
+        </intent>
+    </shortcut>
+    <shortcut android:shortcutId="portrait" android:enabled="true" android:shortcutShortLabel="@string/sc_portrait">
+        <intent android:action="android.intent.action.VIEW" android:targetPackage="com.upravind.lumen" android:targetClass="com.upravind.lumen.MainActivity">
+            <extra android:name="mode" android:value="PORTRAIT" />
+        </intent>
+    </shortcut>
+    <shortcut android:shortcutId="night" android:enabled="true" android:shortcutShortLabel="@string/sc_night">
+        <intent android:action="android.intent.action.VIEW" android:targetPackage="com.upravind.lumen" android:targetClass="com.upravind.lumen.MainActivity">
+            <extra android:name="mode" android:value="NIGHT" />
+        </intent>
+    </shortcut>
+</shortcuts>

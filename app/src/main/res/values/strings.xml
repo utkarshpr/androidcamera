@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sc_selfie">Take Selfie</string>
+    <string name="sc_video">Record Video</string>
+    <string name="sc_portrait">Portrait</string>
+    <string name="sc_night">Night Mode</string>
+</resources>

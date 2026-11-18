@@ -51,11 +51,13 @@ private val GoldLight = Color(0xFFF7E9C8)
 class MainActivity : ComponentActivity() {
     private var controller: CameraController? = null
     private var shutterHook: (() -> Unit)? = null
+    private val pendingMode = mutableStateOf<String?>(null)      // from the home-screen long-press shortcuts
     private val pendingLook = mutableStateOf<String?>(null)     // lets `adb shell am start --es look NAME` pick a look (used for testing)
 
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         intent.getStringExtra("look")?.let { pendingLook.value = it }
+        intent.getStringExtra("mode")?.let { pendingMode.value = it }
     }
 
     override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
@@ -68,6 +70,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         intent.getStringExtra("look")?.let { pendingLook.value = it }
+        intent.getStringExtra("mode")?.let { pendingMode.value = it }
         setContent { MaterialTheme(colorScheme = darkColorScheme(primary = Gold)) { Root() } }
     }
 
@@ -99,10 +102,12 @@ class MainActivity : ComponentActivity() {
         var strength by remember { mutableStateOf(1f) }
         var videoMode by remember { mutableStateOf(false) }
         var showManual by remember { mutableStateOf(false) }
-        var flareOn by remember { mutableStateOf(true) }
+        val prefs = remember { Prefs(context) }
+        var flareOn by remember { mutableStateOf(prefs.flareOn) }
+        val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
         var showPresets by remember { mutableStateOf(false) }
         var presetName by remember { mutableStateOf<String?>(null) }
-        var grid by remember { mutableStateOf(1) }
+        var grid by remember { mutableStateOf(prefs.grid) }
         var ratio by remember { mutableStateOf<String?>(null) }
         var previewView by remember { mutableStateOf<PreviewView?>(null) }
         var timer by remember { mutableStateOf(0) }
@@ -114,12 +119,15 @@ class MainActivity : ComponentActivity() {
         }
         fun fire() {
             if (cam.intervalMode) cam.toggleInterval()
+            else if (cam.hdrMode) cam.takeHdr()
+            else if (cam.portraitMode) cam.takePortrait()
             else if (videoMode) cam.toggleRecording()
             else if (cam.longMode > 0) cam.takeStack(cam.longMode)
             else if (cam.nightMode) cam.takeNight()
             else cam.takePhoto()
         }
         fun shutter() {
+            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
             if (cam.intervalRunning) { cam.toggleInterval(); return }          // stopping must always work, even mid-capture
             if (cam.busy && countdown == null) return
             if (countdown != null) { countdown = null; return }       // tap again cancels the countdown
@@ -144,10 +152,26 @@ class MainActivity : ComponentActivity() {
             val v = previewView ?: return@LaunchedEffect
             v.post { PreviewFx.apply(v, look, strength, cam.extras, grainTick, cam.peaking, cam.zebra) }
         }
-        LaunchedEffect(flareOn) { cam.flareGuard = flareOn }
+        LaunchedEffect(flareOn) { cam.flareGuard = flareOn; prefs.flareOn = flareOn }
+        LaunchedEffect(Unit) { cam.flareStrength = prefs.flareStrength }
+        LaunchedEffect(grid) { prefs.grid = grid }
+        LaunchedEffect(cam.flareStrength) { prefs.flareStrength = cam.flareStrength }
         val aspect = ratio?.split(":")?.let { (it[1].toFloat() / it[0].toFloat()) } ?: (3f / 4f)
 
         var showTools by remember { mutableStateOf(false) }
+        // "My Look": your own recipe, saved
+        var myWarm by remember { mutableStateOf(prefs.myWarm) }
+        var myContrast by remember { mutableStateOf(prefs.myContrast) }
+        var mySat by remember { mutableStateOf(prefs.mySat) }
+        var myVig by remember { mutableStateOf(prefs.myVignette) }
+        var myGrain by remember { mutableStateOf(prefs.myGrain) }
+        val myLook = remember(myWarm, myContrast, mySat, myVig, myGrain) {
+            Look("MY LOOK", LookSpec(sat = mySat, contrast = myContrast, kelvin = myWarm, vignette = myVig, grain = myGrain, swatch = 0xFFC9A66B))
+        }
+        LaunchedEffect(myLook) {
+            prefs.myWarm = myWarm; prefs.myContrast = myContrast; prefs.mySat = mySat; prefs.myVignette = myVig; prefs.myGrain = myGrain
+            if (look.name == "MY LOOK") look = myLook
+        }
         // level / horizon indicator from the gravity sensor
         var roll by remember { mutableStateOf(0f) }
         DisposableEffect(cam.showLevel) {
@@ -197,9 +221,10 @@ class MainActivity : ComponentActivity() {
         }
         var showLooks by remember { mutableStateOf(true) }
         val mode = when {
-            cam.intervalMode -> "INTERVAL"; videoMode -> "VIDEO"; cam.rawMode -> "RAW"; cam.longMode == 1 -> "LONG"; cam.longMode == 2 -> "TRAIL"; cam.nightMode -> "NIGHT"; else -> "PHOTO"
+            cam.intervalMode -> "INTERVAL"; cam.hdrMode -> "HDR"; cam.portraitMode -> "PORTRAIT"; videoMode -> "VIDEO"; cam.rawMode -> "RAW"; cam.longMode == 1 -> "LONG"; cam.longMode == 2 -> "TRAIL"; cam.nightMode -> "NIGHT"; else -> "PHOTO"
         }
         fun setMode(m: String) {
+            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
             if (m == mode) {                                               // tapping the active mode again cycles its time
                 if (m == "INTERVAL") cam.intervalSeconds = when (cam.intervalSeconds) { 2 -> 5; 5 -> 10; 10 -> 30; else -> 2 }
                 if (m == "NIGHT") cam.nightSeconds = when (cam.nightSeconds) { 3 -> 6; 6 -> 10; else -> 3 }
@@ -210,8 +235,10 @@ class MainActivity : ComponentActivity() {
             if (cam.rawMode && m != "RAW") cam.setRaw(false)
             if (cam.intervalRunning) cam.toggleInterval()
             cam.intervalMode = false
-            cam.nightMode = false; cam.longMode = 0
+            cam.nightMode = false; cam.longMode = 0; cam.hdrMode = false; cam.portraitMode = false
             when (m) {
+                "HDR" -> cam.hdrMode = true
+                "PORTRAIT" -> cam.portraitMode = true
                 "INTERVAL" -> cam.intervalMode = true
                 "NIGHT" -> cam.nightMode = true
                 "LONG" -> cam.longMode = 1
@@ -221,6 +248,12 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        LaunchedEffect(pendingMode.value) {
+            val m = pendingMode.value ?: return@LaunchedEffect
+            kotlinx.coroutines.delay(1200)          // let the camera finish starting
+            if (m == "SELFIE") { if (!cam.frontFacing) cam.flipCamera() } else setMode(m)
+            pendingMode.value = null
+        }
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF0E0E12), Color(0xFF050507))))) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
             // ---- viewfinder with floating glass controls
@@ -296,7 +329,7 @@ class MainActivity : ComponentActivity() {
                             val selected = (cam.zoom - z).let { kotlin.math.abs(it) < 0.15f * z }
                             Box(Modifier.padding(horizontal = 1.dp).size(if (selected) 40.dp else 32.dp)
                                 .background(if (selected) Brush.linearGradient(listOf(GoldLight, Gold)) else Brush.linearGradient(listOf(Color.Transparent, Color.Transparent)), CircleShape)
-                                .clickable { cam.zoomTo(z) }, contentAlignment = Alignment.Center) {
+                                .clickable { haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove); cam.zoomTo(z) }, contentAlignment = Alignment.Center) {
                                 Text(if (z < 1f) ".6" else z.toInt().toString() + if (selected) "×" else "", color = if (selected) Color.Black else Color.White.copy(alpha = 0.85f),
                                     fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                             }
@@ -307,9 +340,9 @@ class MainActivity : ComponentActivity() {
 
             // ---- looks strip
             if (showLooks) LazyRow(Modifier.fillMaxWidth().padding(top = 4.dp), contentPadding = PaddingValues(horizontal = 14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                items(Looks.all) { l ->
-                    val on = l == look
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { look = l; strength = 1f; presetName = null }) {
+                items(listOf(Looks.all.first(), myLook) + Looks.all.drop(1)) { l ->
+                    val on = l.name == look.name
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { look = l; strength = 1f; presetName = null; prefs.look = l.name }) {
                         val src = thumbSource
                         Box(Modifier.size(52.dp).clip(CircleShape).background(Color(l.spec.swatch))
                             .border(if (on) 2.5.dp else 1.dp, if (on) Gold else Color.White.copy(alpha = 0.15f), CircleShape)) {
@@ -325,7 +358,14 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            if (!look.isOriginal && showLooks) Row(Modifier.padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (look.name == "MY LOOK" && showLooks) Column(Modifier.padding(horizontal = 22.dp)) {
+                MiniSlider("WARM", myWarm, 4500f..9000f) { myWarm = it }
+                MiniSlider("CONTRAST", myContrast, 0.6f..1.6f) { myContrast = it }
+                MiniSlider("COLOUR", mySat, 0f..2f) { mySat = it }
+                MiniSlider("VIGNETTE", myVig, 0f..1.5f) { myVig = it }
+                MiniSlider("GRAIN", myGrain, 0f..1f) { myGrain = it }
+            }
+            else if (!look.isOriginal && showLooks) Row(Modifier.padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("${(strength * 100).roundToInt()}%", color = Gold, fontSize = 11.sp, modifier = Modifier.width(38.dp))
                 Slider(value = strength, onValueChange = { strength = it }, modifier = Modifier.height(24.dp),
                     colors = SliderDefaults.colors(thumbColor = Gold, activeTrackColor = Gold, inactiveTrackColor = Color.White.copy(alpha = 0.15f)))
@@ -334,7 +374,7 @@ class MainActivity : ComponentActivity() {
             // ---- mode selector
             Row(Modifier.fillMaxWidth().horizontalScroll(androidx.compose.foundation.rememberScrollState()).padding(top = 8.dp), horizontalArrangement = Arrangement.Center) {
                 Spacer(Modifier.width(24.dp))
-                listOf("PHOTO", "NIGHT", "RAW", "LONG", "TRAIL", "INTERVAL", "VIDEO").forEach { m ->
+                listOf("PHOTO", "PORTRAIT", "NIGHT", "HDR", "RAW", "LONG", "TRAIL", "INTERVAL", "VIDEO").forEach { m ->
                     val on = m == mode
                     val label = if (on && m == "NIGHT") "NIGHT ${cam.nightSeconds}s" else if (on && (m == "LONG" || m == "TRAIL")) "$m ${cam.longSeconds}s" else if (on && m == "INTERVAL") "INTERVAL ${cam.intervalSeconds}s" else m
                     Text(label, fontSize = 12.sp, fontWeight = if (on) FontWeight.Bold else FontWeight.Normal, letterSpacing = 1.2.sp,
@@ -374,6 +414,13 @@ class MainActivity : ComponentActivity() {
             timer = timer, onTimer = { timer = when (timer) { 0 -> 3; 3 -> 10; else -> 0 } },
             onPdf = { showTools = false; pdfPicker.launch("image/*") }, videoMode = videoMode, onClose = { showTools = false })
 
+        var tour by remember { mutableStateOf(!prefs.tourSeen) }
+        if (tour) androidx.compose.material3.AlertDialog(
+            onDismissRequest = { tour = false; prefs.tourSeen = true },
+            title = { Text("Welcome to Lumen") },
+            text = { Text("• Tap the picture to focus; hold to lock focus & exposure\n• Pinch or use the lens buttons to zoom — the label shows the real lens\n• Swipe the mode row: Night, RAW, Long, Trail, Interval, HDR, Portrait, Video\n• Tap the active mode again to change its time\n• Volume buttons take a photo\n• ☰ opens Tools: Flare Fix, Manual, Timer, Peaking, Zebra…") },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { tour = false; prefs.tourSeen = true }) { Text("Got it") } }
+        )
         if (pdfPicked.isNotEmpty()) androidx.compose.material3.AlertDialog(
             onDismissRequest = { pdfPicked = emptyList() },
             title = { Text("Make PDF from ${pdfPicked.size} photo(s)") },
@@ -402,6 +449,15 @@ class MainActivity : ComponentActivity() {
             cam.message = if (note != null) "$tip\n($note)" else tip
             showPresets = false
         }
+        }
+    }
+
+    @Composable
+    private fun MiniSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, onChange: (Float) -> Unit) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(label, color = Gold, fontSize = 9.sp, letterSpacing = 0.8.sp, modifier = Modifier.width(66.dp))
+            Slider(value = value, onValueChange = onChange, valueRange = range, modifier = Modifier.height(20.dp),
+                colors = SliderDefaults.colors(thumbColor = Gold, activeTrackColor = Gold, inactiveTrackColor = Color.White.copy(alpha = 0.15f)))
         }
     }
 
@@ -452,6 +508,11 @@ class MainActivity : ComponentActivity() {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     ToolTile("FLARE FIX", if (flareOn) "on" else "off", flareOn, Modifier.weight(1f), onFlare)
                     ToolTile("MANUAL", if (showManual) "ISO · shutter · focus" else "auto", showManual, Modifier.weight(1f), onManual)
+                }
+                if (flareOn) Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("STRENGTH ${(cam.flareStrength * 100).roundToInt()}%", color = Gold, fontSize = 10.sp, modifier = Modifier.width(110.dp))
+                    Slider(value = cam.flareStrength, onValueChange = { cam.flareStrength = it }, valueRange = 0.2f..1.5f, modifier = Modifier.height(24.dp),
+                        colors = SliderDefaults.colors(thumbColor = Gold, activeTrackColor = Gold, inactiveTrackColor = Color.White.copy(alpha = 0.15f)))
                 }
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {

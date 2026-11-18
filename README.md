@@ -15,6 +15,7 @@ Manual camera built with Kotlin, Jetpack Compose and CameraX.
 - **Live look preview**: colour, vignette, grain, light leaks, pixel, CRT scanlines, frosted glass and neon edges are drawn live (Android 13+)
 - Volume-button shutter, 3 / 10 s timer, live histogram, 4K / 1080p, 30 / 60 fps and HDR video options, photos → PDF (1, 2 or 4 per page), long exposure and light-trail stacking
 - Interval mode (a photo every 2 / 5 / 10 / 30 s), burst (5 shots), long-press to lock focus & exposure, focus peaking, zebra, level line, white balance presets, gallery thumbnail
+- **HDR** (3 shots fused), **Portrait** blur (on-device ML Kit), **My Look** sliders (saved), flare strength slider, home-screen long-press shortcuts, haptics, saved settings, first-run tour
 - **Night mode**: shoots a burst for 3 / 6 / 10 s, aligns the frames and averages them (cleaner, brighter low-light photos)
 - **RAW**: saves a DNG plus a JPEG (RAW turns video and the flare watcher off while it is on)
 - **Flare Fix**: removes the milky veil caused by lens flare, plus a live "flare detected" warning

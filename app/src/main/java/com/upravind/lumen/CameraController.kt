@@ -87,7 +87,7 @@ class CameraController(private val context: Context) {
     var burst by mutableStateOf(false)
     var steady = false
     var flareGuard = true
-    var flareStrength = 1f
+    var flareStrength by mutableStateOf(1f)
 
     // manual
     var manual by mutableStateOf(false)
@@ -400,6 +400,99 @@ class CameraController(private val context: Context) {
      * Night mode: shoots as many frames as fit in [nightSeconds], lines them up (hand shake) and averages them.
      * Averaging N frames cuts noise by about sqrt(N), so the picture can be brightened without grain.
      */
+    var hdrMode by mutableStateOf(false)
+    var portraitMode by mutableStateOf(false)
+
+    /** HDR: three shots at -2 / 0 / +2 EV, fused so both the shadows and the bright window keep detail. */
+    fun takeHdr() {
+        val capture = imageCapture ?: return
+        val cam = camera ?: return
+        if (busy) return
+        val ev = cam.cameraInfo.exposureState
+        if (manual || !ev.isExposureCompensationSupported) { message = "HDR needs auto exposure"; return }
+        busy = true
+        val step = ev.exposureCompensationStep.toFloat().coerceAtLeast(0.01f)
+        val hi = (2f / step).roundToInt().coerceAtMost(ev.exposureCompensationRange.upper)
+        val idxs = listOf(-hi.coerceAtMost(-ev.exposureCompensationRange.lower), 0, hi)
+        val frames = mutableListOf<Bitmap>()
+        var rotation = 0
+        fun finishHdr() {
+            processExecutor.execute {
+                try {
+                    var fused = HdrFuser.fuse(frames)
+                    frames.forEach { it.recycle() }
+                    if (rotation != 0) {
+                        val m = Matrix().apply { postRotate(rotation.toFloat()) }
+                        val rotated = Bitmap.createBitmap(fused, 0, 0, fused.width, fused.height, m, true)
+                        fused.recycle(); fused = rotated
+                    }
+                    val out = finish(fused, null)
+                    val uri = save(out); out.recycle()
+                    mainExecutor.execute { nightProgress = null; busy = false; message = if (uri != null) "HDR photo saved" else "Could not save HDR photo" }
+                } catch (e: Throwable) {
+                    mainExecutor.execute { nightProgress = null; busy = false; message = "HDR failed: ${e.message}" }
+                } finally {
+                    mainExecutor.execute { if (!manual) camera?.cameraControl?.setExposureCompensationIndex(exposureIndex) }
+                }
+            }
+        }
+        fun shot(i: Int) {
+            if (i >= idxs.size) { finishHdr(); return }
+            cam.cameraControl.setExposureCompensationIndex(idxs[i])
+            nightProgress = "HDR · hold steady · shot ${i + 1}/3"
+            handler.postDelayed({
+                capture.takePicture(processExecutor, object : ImageCapture.OnImageCapturedCallback() {
+                    override fun onCaptureSuccess(image: ImageProxy) {
+                        try {
+                            if (i == 0) rotation = image.imageInfo.rotationDegrees
+                            val b = image.toBitmap(); image.close()
+                            frames.add(b)
+                            mainExecutor.execute { shot(i + 1) }
+                        } catch (e: Throwable) {
+                            try { image.close() } catch (_: Exception) {}
+                            mainExecutor.execute { nightProgress = null; busy = false; message = "HDR failed: ${e.message}" }
+                        }
+                    }
+                    override fun onError(e: ImageCaptureException) { mainExecutor.execute { nightProgress = null; busy = false; message = "HDR failed: ${e.message}" } }
+                })
+            }, 650)
+        }
+        shot(0)
+    }
+
+    /** Portrait: normal photo, then the person stays sharp and the background is blurred. */
+    fun takePortrait() {
+        val capture = imageCapture ?: return
+        if (busy) return
+        busy = true
+        nightProgress = "PORTRAIT · processing…"
+        capture.takePicture(processExecutor, object : ImageCapture.OnImageCapturedCallback() {
+            override fun onCaptureSuccess(image: ImageProxy) {
+                try {
+                    val rotation = image.imageInfo.rotationDegrees
+                    var bitmap = image.toBitmap(); image.close()
+                    if (rotation != 0) {
+                        val m = Matrix().apply { postRotate(rotation.toFloat()) }
+                        val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, m, true)
+                        bitmap.recycle(); bitmap = rotated
+                    }
+                    val (blurred, found) = PortraitBlur.apply(bitmap)
+                    if (blurred !== bitmap) bitmap.recycle()
+                    val out = finish(blurred, null)
+                    val uri = save(out); out.recycle()
+                    mainExecutor.execute {
+                        nightProgress = null; busy = false
+                        message = if (uri == null) "Could not save photo" else if (found) "Portrait saved" else "No person found — saved as a normal photo"
+                    }
+                } catch (e: Throwable) {
+                    try { image.close() } catch (_: Exception) {}
+                    mainExecutor.execute { nightProgress = null; busy = false; message = "Portrait failed: ${e.message}" }
+                }
+            }
+            override fun onError(e: ImageCaptureException) { mainExecutor.execute { nightProgress = null; busy = false; message = "Portrait failed: ${e.message}" } }
+        })
+    }
+
     fun takeNight() = takeStack(0)
 
     var longMode by mutableStateOf(0)        // 0 off, 1 smooth (average), 2 light trails (lighten)

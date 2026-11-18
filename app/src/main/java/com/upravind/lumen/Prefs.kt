@@ -9,6 +9,7 @@ class Prefs(context: Context) {
     var flareStrength: Float get() = sp.getFloat("flareStrength", 1f); set(v) { sp.edit().putFloat("flareStrength", v).apply() }
     var grid: Int get() = sp.getInt("grid", 1); set(v) { sp.edit().putInt("grid", v).apply() }
     var look: String get() = sp.getString("look", "ORIGINAL") ?: "ORIGINAL"; set(v) { sp.edit().putString("look", v).apply() }
+    var suggestOn: Boolean get() = sp.getBoolean("suggestOn", true); set(v) { sp.edit().putBoolean("suggestOn", v).apply() }
     var tourSeen: Boolean get() = sp.getBoolean("tourSeen", false); set(v) { sp.edit().putBoolean("tourSeen", v).apply() }
     // My Look sliders
     var myWarm: Float get() = sp.getFloat("myWarm", 6500f); set(v) { sp.edit().putFloat("myWarm", v).apply() }

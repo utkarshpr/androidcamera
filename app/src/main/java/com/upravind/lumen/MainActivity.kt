@@ -220,8 +220,16 @@ class MainActivity : ComponentActivity() {
             }
         }
         var showLooks by remember { mutableStateOf(true) }
+        var suggestOn by remember { mutableStateOf(prefs.suggestOn) }
+        var suggestion by remember { mutableStateOf<Suggestion?>(null) }
         val mode = when {
             cam.intervalMode -> "INTERVAL"; cam.hdrMode -> "HDR"; cam.portraitMode -> "PORTRAIT"; videoMode -> "VIDEO"; cam.rawMode -> "RAW"; cam.longMode == 1 -> "LONG"; cam.longMode == 2 -> "TRAIL"; cam.nightMode -> "NIGHT"; else -> "PHOTO"
+        }
+        LaunchedEffect(thumbSource, suggestOn, look.name, mode) {
+            val src = thumbSource
+            if (!suggestOn || src == null || videoMode || cam.isRecording) { suggestion = null; return@LaunchedEffect }
+            val sg = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { Suggest.from(src) }
+            suggestion = if (sg != null && sg.look != look.name && sg.mode != mode) sg else null
         }
         fun setMode(m: String) {
             haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
@@ -320,6 +328,16 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier.align(Alignment.Center).padding(24.dp).background(Color(0xCC000000), RoundedCornerShape(16.dp)).padding(horizontal = 14.dp, vertical = 8.dp))
                         LaunchedEffect(m) { kotlinx.coroutines.delay(3200); cam.message = null }
                     }
+                    suggestion?.let { sg ->
+                        Text("✦  ${sg.text}", color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp).clip(RoundedCornerShape(50))
+                                .background(Brush.linearGradient(listOf(GoldLight, Gold))).clickable {
+                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                    sg.look?.let { n -> look = Looks.byName(n); strength = 1f; presetName = null; prefs.look = n }
+                                    sg.mode?.let { m -> setMode(m) }
+                                    suggestion = null
+                                }.padding(horizontal = 16.dp, vertical = 9.dp))
+                    }
                     // zoom / lens pill
                     if (cam.activeLens.isNotEmpty()) Text("${"%.1f".format(cam.zoom)}×  ·  ${cam.activeLens}", color = Gold, fontSize = 10.sp, letterSpacing = 1.sp,
                         modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 66.dp).clip(RoundedCornerShape(50)).background(Color(0x99000000)).padding(horizontal = 10.dp, vertical = 3.dp))
@@ -412,7 +430,8 @@ class MainActivity : ComponentActivity() {
             cam = cam, flareOn = flareOn, onFlare = { flareOn = !flareOn }, showManual = showManual,
             onManual = { showManual = !showManual; cam.setManualMode(showManual) }, grid = grid, onGrid = { grid = (grid + 1) % 5 },
             timer = timer, onTimer = { timer = when (timer) { 0 -> 3; 3 -> 10; else -> 0 } },
-            onPdf = { showTools = false; pdfPicker.launch("image/*") }, videoMode = videoMode, onClose = { showTools = false })
+            onPdf = { showTools = false; pdfPicker.launch("image/*") }, videoMode = videoMode,
+            suggestOn = suggestOn, onSuggest = { suggestOn = !suggestOn; prefs.suggestOn = suggestOn }, onClose = { showTools = false })
 
         var tour by remember { mutableStateOf(!prefs.tourSeen) }
         if (tour) androidx.compose.material3.AlertDialog(
@@ -494,7 +513,7 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun ToolsSheet(cam: CameraController, flareOn: Boolean, onFlare: () -> Unit, showManual: Boolean, onManual: () -> Unit, grid: Int, onGrid: () -> Unit,
-                           timer: Int, onTimer: () -> Unit, onPdf: () -> Unit, videoMode: Boolean, onClose: () -> Unit) {
+                           timer: Int, onTimer: () -> Unit, onPdf: () -> Unit, videoMode: Boolean, suggestOn: Boolean, onSuggest: () -> Unit, onClose: () -> Unit) {
         Box(Modifier.fillMaxSize().background(Color(0x99000000)).clickable(onClick = onClose)) {
             Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
                 .background(Color(0xFF0F0F13)).border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
@@ -534,6 +553,10 @@ class MainActivity : ComponentActivity() {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     ToolTile("HISTOGRAM", if (cam.showHistogram) "on" else "off", cam.showHistogram, Modifier.weight(1f)) { cam.showHistogram = !cam.showHistogram }
                     ToolTile("BURST", if (cam.burst) "5 shots per press" else "off", cam.burst, Modifier.weight(1f)) { cam.burst = !cam.burst }
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    ToolTile("SUGGESTIONS", if (suggestOn) "tap ideas on screen" else "off", suggestOn, Modifier.weight(1f), onSuggest)
                 }
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {

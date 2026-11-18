@@ -304,6 +304,19 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     )
+                    if (cam.slowActive) AndroidView(
+                        modifier = Modifier.fillMaxHeight().aspectRatio(9f / 16f).align(Alignment.Center),
+                        factory = { ctx ->
+                            android.view.TextureView(ctx).apply {
+                                surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
+                                    override fun onSurfaceTextureAvailable(st: android.graphics.SurfaceTexture, w: Int, h: Int) { cam.slowSurfaceReady(st) }
+                                    override fun onSurfaceTextureSizeChanged(st: android.graphics.SurfaceTexture, w: Int, h: Int) {}
+                                    override fun onSurfaceTextureDestroyed(st: android.graphics.SurfaceTexture): Boolean = true
+                                    override fun onSurfaceTextureUpdated(st: android.graphics.SurfaceTexture) {}
+                                }
+                            }
+                        }
+                    )
                     GridOverlay(grid)
                     if (cam.showLevel) {
                         val level = kotlin.math.abs(roll) < 1.2f || kotlin.math.abs(kotlin.math.abs(roll) - 90f) < 1.2f || kotlin.math.abs(kotlin.math.abs(roll) - 180f) < 1.2f
@@ -585,6 +598,21 @@ class MainActivity : ComponentActivity() {
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     ToolTile("PHOTOS → PDF", "1, 2 or 4 per page", false, Modifier.weight(1f), onPdf)
+                }
+                if (cam.timelapseMode) {
+                    Spacer(Modifier.height(14.dp))
+                    Text("CUSTOM TIME-LAPSE", color = Gold, fontSize = 11.sp, letterSpacing = 1.5.sp, fontWeight = FontWeight.Bold)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("EVERY ${cam.tlSeconds}s", color = Color.White, fontSize = 11.sp, modifier = Modifier.width(86.dp))
+                        Slider(value = cam.tlSeconds.toFloat(), onValueChange = { cam.tlSeconds = it.roundToInt().coerceIn(1, 60) }, valueRange = 1f..60f, modifier = Modifier.height(28.dp),
+                            colors = SliderDefaults.colors(thumbColor = Gold, activeTrackColor = Gold, inactiveTrackColor = Color.White.copy(alpha = 0.15f)))
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        ToolTile("VIDEO SPEED", "${cam.tlFps} fps", true, Modifier.weight(1f)) { cam.tlFps = when (cam.tlFps) { 24 -> 30; 30 -> 60; else -> 24 } }
+                        ToolTile("AUTO-STOP", if (cam.tlStopMinutes == 0) "never" else "after ${cam.tlStopMinutes} min", cam.tlStopMinutes > 0, Modifier.weight(1f)) {
+                            cam.tlStopMinutes = when (cam.tlStopMinutes) { 0 -> 1; 1 -> 2; 2 -> 5; 5 -> 10; 10 -> 30; 30 -> 60; else -> 0 } }
+                    }
+                    Text("A 60 s clip at 30 fps needs 1800 pictures: every 2 s that is one hour.", color = Color.White.copy(alpha = 0.45f), fontSize = 10.sp, modifier = Modifier.padding(top = 6.dp))
                 }
                 if (videoMode) {
                     Spacer(Modifier.height(10.dp))

@@ -13,6 +13,7 @@ import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -143,6 +144,20 @@ class MainActivity : ComponentActivity() {
         val aspect = ratio?.split(":")?.let { (it[1].toFloat() / it[0].toFloat()) } ?: (3f / 4f)
 
         var showTools by remember { mutableStateOf(false) }
+        // small square snapshot of the live camera, used to show every look on the real scene
+        var thumbSource by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+        LaunchedEffect(previewView) {
+            while (true) {
+                val v = previewView
+                val bmp = if (v != null && v.width > 0) try { v.bitmap } catch (_: Throwable) { null } else null
+                if (bmp != null && bmp.width > 8) {
+                    val side = minOf(bmp.width, bmp.height)
+                    val square = android.graphics.Bitmap.createBitmap(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side)
+                    thumbSource = android.graphics.Bitmap.createScaledBitmap(square, 120, 120, true)
+                }
+                delay(1200L)
+            }
+        }
         var showLooks by remember { mutableStateOf(true) }
         val mode = when {
             videoMode -> "VIDEO"; cam.rawMode -> "RAW"; cam.longMode == 1 -> "LONG"; cam.longMode == 2 -> "TRAIL"; cam.nightMode -> "NIGHT"; else -> "PHOTO"
@@ -235,8 +250,15 @@ class MainActivity : ComponentActivity() {
                 items(Looks.all) { l ->
                     val on = l == look
                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { look = l; strength = 1f; presetName = null }) {
-                        Box(Modifier.size(46.dp).clip(CircleShape).background(Color(l.spec.swatch))
-                            .border(if (on) 2.5.dp else 1.dp, if (on) Gold else Color.White.copy(alpha = 0.15f), CircleShape))
+                        val src = thumbSource
+                        Box(Modifier.size(52.dp).clip(CircleShape).background(Color(l.spec.swatch))
+                            .border(if (on) 2.5.dp else 1.dp, if (on) Gold else Color.White.copy(alpha = 0.15f), CircleShape)) {
+                            if (src != null) androidx.compose.foundation.Image(
+                                bitmap = src.asImageBitmap(), contentDescription = l.name, contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize(),
+                                colorFilter = androidx.compose.ui.graphics.ColorFilter.colorMatrix(androidx.compose.ui.graphics.ColorMatrix(l.matrix(1f).array)))
+                            if (l.spec.vignette > 0f) Box(Modifier.fillMaxSize().background(Brush.radialGradient(listOf(Color.Transparent, Color.Black.copy(alpha = (l.spec.vignette * 0.4f).coerceAtMost(0.6f))))))
+                        }
                         Spacer(Modifier.height(3.dp))
                         Text(l.name.lowercase().replaceFirstChar { it.uppercase() }, fontSize = 9.sp, maxLines = 1,
                             color = if (on) Gold else Color.White.copy(alpha = 0.55f), modifier = Modifier.widthIn(max = 62.dp))

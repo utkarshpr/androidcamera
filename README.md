@@ -17,6 +17,7 @@ Manual camera built with Kotlin, Jetpack Compose and CameraX.
 - Interval mode (a photo every 2 / 5 / 10 / 30 s), burst (5 shots), long-press to lock focus & exposure, focus peaking, zebra, level line, white balance presets, gallery thumbnail
 - **HDR** (3 shots fused), **Portrait** blur (on-device ML Kit), **My Look** sliders (saved), flare strength slider, home-screen long-press shortcuts, haptics, saved settings, first-run tour
 - **Suggestions**: a tappable idea (Night, Portrait, Forest, Sunset, Vivid Sky, Food, Indoor…) based on what the camera sees
+- **Reset**: Tools → "Reset everything to normal" puts every setting back to how the app starts
 - **Night mode**: shoots a burst for 3 / 6 / 10 s, aligns the frames and averages them (cleaner, brighter low-light photos)
 - **RAW**: saves a DNG plus a JPEG (RAW turns video and the flare watcher off while it is on)
 - **Flare Fix**: removes the milky veil caused by lens flare, plus a live "flare detected" warning

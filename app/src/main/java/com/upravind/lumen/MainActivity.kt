@@ -221,6 +221,7 @@ class MainActivity : ComponentActivity() {
         }
         var showLooks by remember { mutableStateOf(true) }
         var suggestOn by remember { mutableStateOf(prefs.suggestOn) }
+        var confirmReset by remember { mutableStateOf(false) }
         var suggestion by remember { mutableStateOf<Suggestion?>(null) }
         val mode = when {
             cam.intervalMode -> "INTERVAL"; cam.hdrMode -> "HDR"; cam.portraitMode -> "PORTRAIT"; videoMode -> "VIDEO"; cam.rawMode -> "RAW"; cam.longMode == 1 -> "LONG"; cam.longMode == 2 -> "TRAIL"; cam.nightMode -> "NIGHT"; else -> "PHOTO"
@@ -230,6 +231,14 @@ class MainActivity : ComponentActivity() {
             if (!suggestOn || src == null || videoMode || cam.isRecording) { suggestion = null; return@LaunchedEffect }
             val sg = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { Suggest.from(src) }
             suggestion = if (sg != null && sg.look != look.name && sg.mode != mode) sg else null
+        }
+        fun resetAll() {
+            cam.resetAll()
+            look = Looks.all.first(); strength = 1f; videoMode = false; flareOn = true; grid = 1; ratio = null; timer = 0; countdown = null
+            presetName = null; showManual = false; suggestOn = true; suggestion = null
+            myWarm = 6500f; myContrast = 1f; mySat = 1f; myVig = 0f; myGrain = 0f
+            prefs.look = "ORIGINAL"; prefs.flareOn = true; prefs.grid = 1; prefs.flareStrength = 1f; prefs.suggestOn = true
+            cam.message = "Everything is back to normal"
         }
         fun setMode(m: String) {
             haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
@@ -431,8 +440,15 @@ class MainActivity : ComponentActivity() {
             onManual = { showManual = !showManual; cam.setManualMode(showManual) }, grid = grid, onGrid = { grid = (grid + 1) % 5 },
             timer = timer, onTimer = { timer = when (timer) { 0 -> 3; 3 -> 10; else -> 0 } },
             onPdf = { showTools = false; pdfPicker.launch("image/*") }, videoMode = videoMode,
-            suggestOn = suggestOn, onSuggest = { suggestOn = !suggestOn; prefs.suggestOn = suggestOn }, onClose = { showTools = false })
+            suggestOn = suggestOn, onSuggest = { suggestOn = !suggestOn; prefs.suggestOn = suggestOn }, onReset = { showTools = false; confirmReset = true }, onClose = { showTools = false })
 
+        if (confirmReset) androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirmReset = false },
+            title = { Text("Reset everything?") },
+            text = { Text("Mode, look, zoom, timer, manual settings and tools all go back to how the app starts. Your photos are not touched.") },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { confirmReset = false; resetAll() }) { Text("Reset") } },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { confirmReset = false }) { Text("Cancel") } }
+        )
         var tour by remember { mutableStateOf(!prefs.tourSeen) }
         if (tour) androidx.compose.material3.AlertDialog(
             onDismissRequest = { tour = false; prefs.tourSeen = true },
@@ -513,7 +529,7 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun ToolsSheet(cam: CameraController, flareOn: Boolean, onFlare: () -> Unit, showManual: Boolean, onManual: () -> Unit, grid: Int, onGrid: () -> Unit,
-                           timer: Int, onTimer: () -> Unit, onPdf: () -> Unit, videoMode: Boolean, suggestOn: Boolean, onSuggest: () -> Unit, onClose: () -> Unit) {
+                           timer: Int, onTimer: () -> Unit, onPdf: () -> Unit, videoMode: Boolean, suggestOn: Boolean, onSuggest: () -> Unit, onReset: () -> Unit, onClose: () -> Unit) {
         Box(Modifier.fillMaxSize().background(Color(0x99000000)).clickable(onClick = onClose)) {
             Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
                 .background(Color(0xFF0F0F13)).border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
@@ -571,6 +587,9 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 if (showManual) { Spacer(Modifier.height(10.dp)); ManualPanel(cam) }
+                Spacer(Modifier.height(14.dp))
+                Text("RESET EVERYTHING TO NORMAL", color = Color(0xFFFF8A80), fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color(0xFF1A1214)).border(1.dp, Color(0x55FF8A80), RoundedCornerShape(18.dp)).clickable(onClick = onReset).padding(vertical = 14.dp))
             }
         }
     }

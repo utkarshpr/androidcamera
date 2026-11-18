@@ -639,6 +639,21 @@ class CameraController(private val context: Context) {
 
     private fun stamp() = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
 
+    /** Puts every camera setting back to how the app starts. */
+    fun resetAll() {
+        if (intervalRunning) toggleInterval()
+        if (focusLocked) { camera?.cameraControl?.cancelFocusAndMetering(); focusLocked = false }
+        look = Looks.all.first(); strength = 1f; extras = Extras(); ratio = null; frame = false; burst = false; steady = false
+        manual = false; iso = 100; shutterSeconds = 1.0 / 120; focusManual = false; focusDiopters = 0f; exposureIndex = 0; wbMode = 0
+        peaking = false; zebra = false; showLevel = false; showHistogram = false
+        nightMode = false; longMode = 0; intervalMode = false; hdrMode = false; portraitMode = false
+        nightSeconds = 3; longSeconds = 10; intervalSeconds = 5
+        videoUhd = true; video60 = false; videoHdr = false; videoOnly = false; rawMode = false
+        flareStrength = 1f; flareGuard = true; flareWatch = true; frontFacing = false; zoom = 1f
+        videoOptionsChanged()          // rebuilds the camera session with the defaults (back camera, photo)
+        mainExecutor.execute { zoomTo(1f); applyManual() }
+    }
+
     fun release() {
         handler.removeCallbacksAndMessages(null)
         recording?.stop()

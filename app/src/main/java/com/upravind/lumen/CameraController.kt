@@ -84,7 +84,7 @@ class CameraController(private val context: Context) {
     var extras by mutableStateOf(Extras())
     var ratio: String? = null          // "1:1", "3:2", "16:9"… null = camera default (4:3)
     var frame = false
-    var burst = false
+    var burst by mutableStateOf(false)
     var steady = false
     var flareGuard = true
     var flareStrength = 1f
@@ -207,7 +207,18 @@ class CameraController(private val context: Context) {
         camera?.cameraControl?.setZoomRatio(r)
     }
 
+    var focusLocked by mutableStateOf(false)
+
+    /** Long press: lock focus and exposure on that spot until the next tap. */
+    fun lockFocus(view: PreviewView, x: Float, y: Float) {
+        val point = view.meteringPointFactory.createPoint(x, y)
+        camera?.cameraControl?.startFocusAndMetering(androidx.camera.core.FocusMeteringAction.Builder(point).disableAutoCancel().build())
+        focusLocked = true
+        message = "Focus & exposure locked — tap to unlock"
+    }
+
     fun tapToFocus(view: PreviewView, x: Float, y: Float) {
+        if (focusLocked) { camera?.cameraControl?.cancelFocusAndMetering(); focusLocked = false; message = "Unlocked" }
         val point = view.meteringPointFactory.createPoint(x, y)
         val action = androidx.camera.core.FocusMeteringAction.Builder(point).build()
         camera?.cameraControl?.startFocusAndMetering(action)
@@ -436,6 +447,30 @@ class CameraController(private val context: Context) {
         next()
     }
 
+    // ------------------------------------------------------------------ interval (time-lapse of stills)
+
+    var intervalMode by mutableStateOf(false)
+    var intervalSeconds by mutableStateOf(5)
+    var intervalRunning by mutableStateOf(false)
+    var intervalCount by mutableStateOf(0)
+    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    fun toggleInterval() {
+        if (intervalRunning) {
+            intervalRunning = false; handler.removeCallbacksAndMessages(null)
+            message = "Interval stopped · $intervalCount photos"; nightProgress = null
+            return
+        }
+        intervalRunning = true; intervalCount = 0
+        intervalTick()
+    }
+
+    private fun intervalTick() {
+        if (!intervalRunning) return
+        if (!busy) { takePhoto(); intervalCount++; nightProgress = "INTERVAL · $intervalCount photos · every ${intervalSeconds}s" }
+        handler.postDelayed({ intervalTick() }, intervalSeconds * 1000L)
+    }
+
     private fun photoValues() = ContentValues().apply {
         put(MediaStore.Images.Media.DISPLAY_NAME, "Lumen_${stamp()}")
         put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
@@ -480,6 +515,7 @@ class CameraController(private val context: Context) {
     private fun stamp() = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
 
     fun release() {
+        handler.removeCallbacksAndMessages(null)
         recording?.stop()
         analysisExecutor.shutdown()
         processExecutor.shutdown()

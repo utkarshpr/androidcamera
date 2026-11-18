@@ -18,6 +18,8 @@ Manual camera built with Kotlin, Jetpack Compose and CameraX.
 - **HDR** (3 shots fused), **Portrait** blur (on-device ML Kit), **My Look** sliders (saved), flare strength slider, home-screen long-press shortcuts, haptics, saved settings, first-run tour
 - **Suggestions**: a tappable idea (Night, Portrait, Forest, Sunset, Vivid Sky, Food, Indoor…) based on what the camera sees
 - **Reset**: Tools → "Reset everything to normal" puts every setting back to how the app starts
+- **Time-lapse video** (a picture every 1 / 2 / 5 / 10 s, joined into a 30 fps MP4), pro video options (24 / 30 fps, stabilisation, recording timer, manual exposure in Tools)
+- Slow motion tab appears only if CameraX reports a high-speed quality (the S22 Ultra does not; it would need a direct Camera2 high-speed session)
 - **Night mode**: shoots a burst for 3 / 6 / 10 s, aligns the frames and averages them (cleaner, brighter low-light photos)
 - **RAW**: saves a DNG plus a JPEG (RAW turns video and the flare watcher off while it is on)
 - **Flare Fix**: removes the milky veil caused by lens flare, plus a live "flare detected" warning

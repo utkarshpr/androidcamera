@@ -41,7 +41,7 @@ import java.util.concurrent.Executors
 import kotlin.math.roundToInt
 
 /** Owns the CameraX session: preview, photo, video, zoom/lens, manual controls and the live flare detector. */
-@OptIn(ExperimentalCamera2Interop::class)
+@OptIn(ExperimentalCamera2Interop::class, androidx.camera.video.ExperimentalHighSpeedVideo::class, androidx.camera.core.ExperimentalSessionConfig::class)
 class CameraController(private val context: Context) {
     private val mainExecutor = ContextCompat.getMainExecutor(context)
     private val analysisExecutor = Executors.newSingleThreadExecutor()
@@ -56,6 +56,7 @@ class CameraController(private val context: Context) {
     // ---- observable state for the UI ----
     var message by mutableStateOf<String?>(null)
     var isRecording by mutableStateOf(false)
+    var recSeconds by mutableStateOf(0)
     var busy by mutableStateOf(false)
     var flareWarning by mutableStateOf(false)
     var showHistogram by mutableStateOf(false)
@@ -121,7 +122,15 @@ class CameraController(private val context: Context) {
     private var boundView: PreviewView? = null
     /** In video mode only preview + video are bound: the phone only offers 60 fps / HDR with fewer streams. */
     var videoOnly by mutableStateOf(false)
-    fun setVideoMode(on: Boolean) { videoOnly = on; if (on && rawMode) rawMode = false; videoOptionsChanged() }
+    /** Slow motion: 120 / 240 fps through the phone's high-speed camera session. */
+    var slowMo by mutableStateOf(false)
+    var slowMoFps by mutableStateOf(0)
+    /** CameraX can only offer slow motion when the phone reports a high-speed quality for this camera (the S22 Ultra does not). */
+    var slowMoSupported by mutableStateOf(false)
+    var videoFps by mutableStateOf(30)
+    var stabilise by mutableStateOf(true)
+    fun setVideoMode(on: Boolean) { videoOnly = on || slowMo; if (on && rawMode) rawMode = false; videoOptionsChanged() }
+    fun enterSlowMo(on: Boolean) { slowMo = on; videoOnly = on; if (on && rawMode) rawMode = false; videoOptionsChanged() }
     var rawMode by mutableStateOf(false)
     var rawSupported by mutableStateOf(false)
 
@@ -161,6 +170,8 @@ class CameraController(private val context: Context) {
             val recorder = Recorder.Builder().setQualitySelector(QualitySelector.from(wanted, androidx.camera.video.FallbackStrategy.lowerQualityOrHigherThan(Quality.HD))).build()
             val videoBuilder = VideoCapture.Builder(recorder)
             if (video60) videoBuilder.setTargetFrameRate(Range(60, 60))
+            else if (videoFps != 30 && !slowMo) videoBuilder.setTargetFrameRate(Range(videoFps, videoFps))
+            if (stabilise && !slowMo) videoBuilder.setVideoStabilizationEnabled(true)
             if (videoHdr) videoBuilder.setDynamicRange(androidx.camera.core.DynamicRange.HLG_10_BIT)
             val video = videoBuilder.build()
             var frame = 0
@@ -184,14 +195,35 @@ class CameraController(private val context: Context) {
             val selector = if (frontFacing) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
             try {
                 p.unbindAll()
-                camera = if (rawMode) p.bindToLifecycle(owner, selector, preview, capture)
+                var bound: Camera? = null
+                var activeVideo = video
+                if (slowMo) {
+                    slowMoFps = 0
+                    // high-speed capture only offers some qualities: ask the phone which, and record at the best one
+                    val hsQuality = try {
+                        Recorder.getHighSpeedVideoCapabilities(p.getCameraInfo(selector))?.getSupportedQualities(androidx.camera.core.DynamicRange.SDR)?.firstOrNull()
+                    } catch (e: Throwable) { null }
+                    val hsVideo = if (hsQuality != null) VideoCapture.withOutput(Recorder.Builder().setQualitySelector(QualitySelector.from(hsQuality)).build()) else video
+                    for (fps in listOf(240, 120)) {
+                        try {
+                            val hs = androidx.camera.video.HighSpeedVideoSessionConfig(hsVideo, preview, Range(fps, fps), true)
+                            activeVideo = hsVideo
+                            bound = p.bindToLifecycle(owner, selector, hs)
+                            slowMoFps = fps
+                            break
+                        } catch (e: Exception) { p.unbindAll() }
+                    }
+                    if (bound == null) { slowMo = false; videoOnly = false; message = "Slow motion isn't available on this camera" }
+                }
+                camera = bound ?: if (rawMode) p.bindToLifecycle(owner, selector, preview, capture)
                          else if (videoOnly) p.bindToLifecycle(owner, selector, preview, video)
                          else p.bindToLifecycle(owner, selector, preview, capture, video, analysis)
+                slowMoSupported = try { Recorder.getHighSpeedVideoCapabilities(camera!!.cameraInfo) != null } catch (e: Throwable) { false }
                 fpsRanges = camera!!.cameraInfo.supportedFrameRateRanges.joinToString { "${it.lower}-${it.upper}" }
                 rawSupported = ImageCapture.getImageCaptureCapabilities(camera!!.cameraInfo).supportedOutputFormats
                     .contains(ImageCapture.OUTPUT_FORMAT_RAW_JPEG)
                 imageCapture = capture
-                videoCapture = video
+                videoCapture = activeVideo
                 camera?.cameraInfo?.zoomState?.observe(owner) { z ->
                     zoom = z.zoomRatio; minZoom = z.minZoomRatio; maxZoom = z.maxZoomRatio
                 }
@@ -574,6 +606,75 @@ class CameraController(private val context: Context) {
 
     // ------------------------------------------------------------------ interval (time-lapse of stills)
 
+    var timelapseMode by mutableStateOf(false)
+    var tlSeconds by mutableStateOf(2)
+    var tlRunning by mutableStateOf(false)
+    private val tlFrames = mutableListOf<java.io.File>()
+    private var tlBusy = false
+    private var tlW = 0; private var tlH = 0
+
+    /** Time-lapse video: a picture every [tlSeconds] seconds, joined into a 30 fps video when you stop. */
+    fun toggleTimelapse() {
+        if (tlRunning) {
+            tlRunning = false; handler.removeCallbacksAndMessages(null)
+            if (tlFrames.size < 2) { message = "Time-lapse needs at least 2 frames"; nightProgress = null; return }
+            busy = true; nightProgress = "TIME-LAPSE · making the video…"
+            val files = tlFrames.toList(); val w = tlW; val h = tlH
+            processExecutor.execute {
+                try {
+                    val tmp = java.io.File(context.cacheDir, "tl_out.mp4")
+                    TimelapseEncoder.encode(files, w, h, 30, tmp)
+                    val values = ContentValues().apply {
+                        put(MediaStore.Video.Media.DISPLAY_NAME, "Lumen_TL_${stamp()}")
+                        put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                        put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/Lumen")
+                    }
+                    val uri = context.contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+                    if (uri != null) context.contentResolver.openOutputStream(uri)?.use { o -> tmp.inputStream().use { it.copyTo(o) } }
+                    tmp.delete(); files.forEach { it.delete() }
+                    mainExecutor.execute { busy = false; nightProgress = null; message = if (uri != null) "Time-lapse saved · ${files.size} frames → ${files.size / 30f}s video" else "Could not save time-lapse" }
+                } catch (e: Throwable) {
+                    mainExecutor.execute { busy = false; nightProgress = null; message = "Time-lapse failed: ${e.message}" }
+                }
+            }
+            return
+        }
+        val dir = java.io.File(context.cacheDir, "tl"); dir.mkdirs(); dir.listFiles()?.forEach { it.delete() }
+        tlFrames.clear(); tlRunning = true; tlBusy = false
+        tlTick()
+    }
+
+    private fun tlTick() {
+        if (!tlRunning) return
+        val capture = imageCapture
+        if (capture != null && !tlBusy) {
+            tlBusy = true
+            capture.takePicture(processExecutor, object : ImageCapture.OnImageCapturedCallback() {
+                override fun onCaptureSuccess(image: ImageProxy) {
+                    try {
+                        val rotation = image.imageInfo.rotationDegrees
+                        var bmp = image.toBitmap(); image.close()
+                        if (rotation != 0) { val m = Matrix().apply { postRotate(rotation.toFloat()) }; val r = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true); bmp.recycle(); bmp = r }
+                        // video size: long side 1920, both sides a multiple of 16
+                        val scale = 1920f / maxOf(bmp.width, bmp.height)
+                        val w = ((bmp.width * scale).toInt() / 16 * 16).coerceAtLeast(16); val h = ((bmp.height * scale).toInt() / 16 * 16).coerceAtLeast(16)
+                        if (tlFrames.isEmpty()) { tlW = w; tlH = h }
+                        val small = Bitmap.createScaledBitmap(bmp, tlW, tlH, true); if (small !== bmp) bmp.recycle()
+                        val f = java.io.File(context.cacheDir, "tl/f${tlFrames.size.toString().padStart(5, '0')}.jpg")
+                        f.outputStream().use { small.compress(Bitmap.CompressFormat.JPEG, 92, it) }
+                        small.recycle()
+                        tlFrames.add(f)
+                        val n = tlFrames.size
+                        mainExecutor.execute { nightProgress = "TIME-LAPSE · $n frames · ${"%.1f".format(n / 30f)}s of video" }
+                    } catch (e: Throwable) { try { image.close() } catch (_: Exception) {} }
+                    tlBusy = false
+                }
+                override fun onError(e: ImageCaptureException) { tlBusy = false }
+            })
+        }
+        handler.postDelayed({ tlTick() }, tlSeconds * 1000L)
+    }
+
     var intervalMode by mutableStateOf(false)
     var intervalSeconds by mutableStateOf(5)
     var intervalRunning by mutableStateOf(false)
@@ -627,7 +728,11 @@ class CameraController(private val context: Context) {
         }
         recording = pending.start(mainExecutor) { event ->
             when (event) {
-                is VideoRecordEvent.Start -> isRecording = true
+                is VideoRecordEvent.Start -> {
+                    isRecording = true; recSeconds = 0
+                    val tick = object : Runnable { override fun run() { if (isRecording) { recSeconds++; handler.postDelayed(this, 1000) } } }
+                    handler.postDelayed(tick, 1000)
+                }
                 is VideoRecordEvent.Finalize -> {
                     isRecording = false
                     message = if (event.hasError()) "Video error ${event.error}" else "Video saved"
@@ -642,13 +747,14 @@ class CameraController(private val context: Context) {
     /** Puts every camera setting back to how the app starts. */
     fun resetAll() {
         if (intervalRunning) toggleInterval()
+        if (tlRunning) { tlRunning = false; handler.removeCallbacksAndMessages(null) }
         if (focusLocked) { camera?.cameraControl?.cancelFocusAndMetering(); focusLocked = false }
         look = Looks.all.first(); strength = 1f; extras = Extras(); ratio = null; frame = false; burst = false; steady = false
         manual = false; iso = 100; shutterSeconds = 1.0 / 120; focusManual = false; focusDiopters = 0f; exposureIndex = 0; wbMode = 0
         peaking = false; zebra = false; showLevel = false; showHistogram = false
         nightMode = false; longMode = 0; intervalMode = false; hdrMode = false; portraitMode = false
         nightSeconds = 3; longSeconds = 10; intervalSeconds = 5
-        videoUhd = true; video60 = false; videoHdr = false; videoOnly = false; rawMode = false
+        videoUhd = true; video60 = false; videoHdr = false; videoOnly = false; rawMode = false; slowMo = false; videoFps = 30; stabilise = true; timelapseMode = false
         flareStrength = 1f; flareGuard = true; flareWatch = true; frontFacing = false; zoom = 1f
         videoOptionsChanged()          // rebuilds the camera session with the defaults (back camera, photo)
         mainExecutor.execute { zoomTo(1f); applyManual() }

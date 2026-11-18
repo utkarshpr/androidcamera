@@ -118,7 +118,8 @@ class MainActivity : ComponentActivity() {
             if (uris.isNotEmpty()) pdfPicked = uris.take(64)
         }
         fun fire() {
-            if (cam.intervalMode) cam.toggleInterval()
+            if (cam.timelapseMode) cam.toggleTimelapse()
+            else if (cam.intervalMode) cam.toggleInterval()
             else if (cam.hdrMode) cam.takeHdr()
             else if (cam.portraitMode) cam.takePortrait()
             else if (videoMode) cam.toggleRecording()
@@ -128,6 +129,7 @@ class MainActivity : ComponentActivity() {
         }
         fun shutter() {
             haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+            if (cam.tlRunning) { cam.toggleTimelapse(); return }
             if (cam.intervalRunning) { cam.toggleInterval(); return }          // stopping must always work, even mid-capture
             if (cam.busy && countdown == null) return
             if (countdown != null) { countdown = null; return }       // tap again cancels the countdown
@@ -224,7 +226,7 @@ class MainActivity : ComponentActivity() {
         var confirmReset by remember { mutableStateOf(false) }
         var suggestion by remember { mutableStateOf<Suggestion?>(null) }
         val mode = when {
-            cam.intervalMode -> "INTERVAL"; cam.hdrMode -> "HDR"; cam.portraitMode -> "PORTRAIT"; videoMode -> "VIDEO"; cam.rawMode -> "RAW"; cam.longMode == 1 -> "LONG"; cam.longMode == 2 -> "TRAIL"; cam.nightMode -> "NIGHT"; else -> "PHOTO"
+            cam.timelapseMode -> "TIME-LAPSE"; cam.slowMo -> "SLOW-MO"; cam.intervalMode -> "INTERVAL"; cam.hdrMode -> "HDR"; cam.portraitMode -> "PORTRAIT"; videoMode -> "VIDEO"; cam.rawMode -> "RAW"; cam.longMode == 1 -> "LONG"; cam.longMode == 2 -> "TRAIL"; cam.nightMode -> "NIGHT"; else -> "PHOTO"
         }
         LaunchedEffect(thumbSource, suggestOn, look.name, mode) {
             val src = thumbSource
@@ -243,14 +245,18 @@ class MainActivity : ComponentActivity() {
         fun setMode(m: String) {
             haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
             if (m == mode) {                                               // tapping the active mode again cycles its time
+                if (m == "TIME-LAPSE") cam.tlSeconds = when (cam.tlSeconds) { 1 -> 2; 2 -> 5; 5 -> 10; else -> 1 }
                 if (m == "INTERVAL") cam.intervalSeconds = when (cam.intervalSeconds) { 2 -> 5; 5 -> 10; 10 -> 30; else -> 2 }
                 if (m == "NIGHT") cam.nightSeconds = when (cam.nightSeconds) { 3 -> 6; 6 -> 10; else -> 3 }
                 if (m == "LONG" || m == "TRAIL") cam.longSeconds = when (cam.longSeconds) { 5 -> 10; 10 -> 20; 20 -> 30; else -> 5 }
                 return
             }
+            if (cam.slowMo && m != "SLOW-MO") { videoMode = false; cam.enterSlowMo(false) }
             if (videoMode && m != "VIDEO") { videoMode = false; cam.setVideoMode(false) }
             if (cam.rawMode && m != "RAW") cam.setRaw(false)
             if (cam.intervalRunning) cam.toggleInterval()
+            if (cam.tlRunning) cam.toggleTimelapse()
+            cam.timelapseMode = false
             cam.intervalMode = false
             cam.nightMode = false; cam.longMode = 0; cam.hdrMode = false; cam.portraitMode = false
             when (m) {
@@ -262,6 +268,8 @@ class MainActivity : ComponentActivity() {
                 "TRAIL" -> cam.longMode = 2
                 "RAW" -> { cam.videoOnly = false; cam.setRaw(true) }
                 "VIDEO" -> { videoMode = true; cam.setVideoMode(true) }
+                "SLOW-MO" -> { videoMode = true; cam.enterSlowMo(true) }
+                "TIME-LAPSE" -> cam.timelapseMode = true
             }
         }
 
@@ -314,7 +322,7 @@ class MainActivity : ComponentActivity() {
                         GlassButton("☰") { showTools = true }
                         Spacer(Modifier.weight(1f))
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            if (cam.isRecording) GlassPill("● REC", Color(0xFFFF5A5A))
+                            if (cam.isRecording) GlassPill("● REC  %02d:%02d".format(cam.recSeconds / 60, cam.recSeconds % 60), Color(0xFFFF5A5A))
                             else cam.nightProgress?.let { GlassPill(it, Color(0xFF9EC5FF)) }
                             if (cam.flareWarning && cam.nightProgress == null && !cam.isRecording) GlassPill("FLARE · wipe the lens or shade it", Color(0xFFFFB454))
                             if (cam.focusLocked) GlassPill("AE/AF LOCK", Gold)
@@ -401,9 +409,9 @@ class MainActivity : ComponentActivity() {
             // ---- mode selector
             Row(Modifier.fillMaxWidth().horizontalScroll(androidx.compose.foundation.rememberScrollState()).padding(top = 8.dp), horizontalArrangement = Arrangement.Center) {
                 Spacer(Modifier.width(24.dp))
-                listOf("PHOTO", "PORTRAIT", "NIGHT", "HDR", "RAW", "LONG", "TRAIL", "INTERVAL", "VIDEO").forEach { m ->
+                listOf("PHOTO", "PORTRAIT", "NIGHT", "HDR", "RAW", "LONG", "TRAIL", "INTERVAL", "VIDEO", "SLOW-MO", "TIME-LAPSE").filter { it != "SLOW-MO" || cam.slowMoSupported }.forEach { m ->
                     val on = m == mode
-                    val label = if (on && m == "NIGHT") "NIGHT ${cam.nightSeconds}s" else if (on && (m == "LONG" || m == "TRAIL")) "$m ${cam.longSeconds}s" else if (on && m == "INTERVAL") "INTERVAL ${cam.intervalSeconds}s" else m
+                    val label = if (on && m == "NIGHT") "NIGHT ${cam.nightSeconds}s" else if (on && (m == "LONG" || m == "TRAIL")) "$m ${cam.longSeconds}s" else if (on && m == "INTERVAL") "INTERVAL ${cam.intervalSeconds}s" else if (on && m == "SLOW-MO" && cam.slowMoFps > 0) "SLOW-MO ${cam.slowMoFps}" else if (on && m == "TIME-LAPSE") "TIME-LAPSE ${cam.tlSeconds}s" else m
                     Text(label, fontSize = 12.sp, fontWeight = if (on) FontWeight.Bold else FontWeight.Normal, letterSpacing = 1.2.sp,
                         color = if (on) Gold else Color.White.copy(alpha = 0.5f),
                         modifier = Modifier.clickable { setMode(m) }.padding(horizontal = 14.dp, vertical = 6.dp))
@@ -423,7 +431,7 @@ class MainActivity : ComponentActivity() {
                         GlassTile("PRESETS", showPresets) { showPresets = !showPresets }
                     }
                 }
-                val recording = cam.isRecording || cam.intervalRunning
+                val recording = cam.isRecording || cam.intervalRunning || cam.tlRunning
                 Box(Modifier.size(86.dp).border(3.dp, Brush.linearGradient(listOf(GoldLight, Gold)), CircleShape).padding(7.dp)
                     .clip(CircleShape).background(if (videoMode) Color(0xFFE53935) else Color(0xFFF4EBDD)).clickable { shutter() },
                     contentAlignment = Alignment.Center) {
@@ -579,6 +587,11 @@ class MainActivity : ComponentActivity() {
                     ToolTile("PHOTOS → PDF", "1, 2 or 4 per page", false, Modifier.weight(1f), onPdf)
                 }
                 if (videoMode) {
+                    Spacer(Modifier.height(10.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        ToolTile("FRAME RATE", if (cam.videoFps == 24) "24 · cinematic" else "30", cam.videoFps == 24, Modifier.weight(1f)) { cam.videoFps = if (cam.videoFps == 24) 30 else 24; cam.videoOptionsChanged() }
+                        ToolTile("STABILISE", if (cam.stabilise) "on" else "off", cam.stabilise, Modifier.weight(1f)) { cam.stabilise = !cam.stabilise; cam.videoOptionsChanged() }
+                    }
                     Spacer(Modifier.height(10.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         ToolTile("RESOLUTION", if (cam.videoUhd) "4K" else "1080p", cam.videoUhd, Modifier.weight(1f)) { cam.videoUhd = !cam.videoUhd; cam.videoOptionsChanged() }

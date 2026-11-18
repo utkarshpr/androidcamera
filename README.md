@@ -6,7 +6,12 @@ Manual camera built with Kotlin, Jetpack Compose and CameraX.
 - Photo and video (UHD where available), saved to Pictures/Lumen and Movies/Lumen
 - Lens buttons 0.6× / 1× / 3× / 10× (the phone switches the real lens)
 - Manual ISO, shutter, focus and exposure compensation (Camera2 interop)
-- 14 colour looks, live on the preview and applied to saved photos (incl. INDOOR TRUE / INDOOR COZY)
+- 70 colour looks ported from the iPhone app, live on the preview and applied to saved photos
+  (vignette, grain, glow, light leaks, dust, pixel / CRT / glass effects are drawn onto saved photos)
+- 88 presets in 9 categories (Food, People, Indoor, Landscape, Night, Street, Weather, Creative, Pro) with the same
+  tips. Presets set look, strength, grid, crop ratio, burst, steady wait, manual ISO/shutter and exposure bias.
+  Presets that need STARS / NIGHT / PANO / TRAIL modes apply their look and say the mode isn't available yet.
+- `tools/gen_from_ios.py` regenerates `LookData.kt` and `PresetData.kt` from the iPhone sources
 - **Flare Fix**: removes the milky veil caused by lens flare, plus a live "flare detected" warning
 
 ## About lens flare

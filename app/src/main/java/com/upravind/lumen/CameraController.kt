@@ -38,6 +38,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+import kotlin.math.roundToInt
 
 /** Owns the CameraX session: preview, photo, video, zoom/lens, manual controls and the live flare detector. */
 @OptIn(ExperimentalCamera2Interop::class)
@@ -63,6 +64,12 @@ class CameraController(private val context: Context) {
 
     // ---- settings ----
     var look: Look = Looks.all.first()
+    var strength = 1f
+    var extras = Extras()
+    var ratio: String? = null          // "1:1", "3:2", "16:9"… null = camera default (4:3)
+    var frame = false
+    var burst = false
+    var steady = false
     var flareGuard = true
     var flareStrength = 1f
 
@@ -175,19 +182,44 @@ class CameraController(private val context: Context) {
         if (!manual) camera?.cameraControl?.setExposureCompensationIndex(exposureIndex)
     }
 
+    // ------------------------------------------------------------------ presets
+
+    /** Applies everything a preset sets that Android supports; returns a note about what it had to skip. */
+    fun applyPreset(p: Preset): String? {
+        look = Looks.byName(p.look); strength = p.strength
+        extras = Extras(p.grain, p.glow, p.leak, p.dust)
+        ratio = p.ratio; frame = p.frame; burst = p.burst; steady = p.steady
+        if (p.manualIso != null && p.manualShutter != null) {
+            iso = p.manualIso; shutterSeconds = p.manualShutter; manual = true
+        } else manual = false
+        val step = camera?.cameraInfo?.exposureState?.exposureCompensationStep?.toFloat() ?: 0f
+        exposureIndex = if (step > 0f) (p.bias / step).roundToInt() else 0
+        applyManual()
+        return if (p.mode != "PHOTO") "${p.mode} mode isn't on Android yet — using a normal photo" else null
+    }
+
     // ------------------------------------------------------------------ photo
 
     fun takePhoto() {
-        val capture = imageCapture ?: return
         if (busy) return
         busy = true
-        val needProcessing = look.name != "ORIGINAL" || flareGuard
+        val shots = if (burst) 5 else 1
+        // "steady" presets wait a moment so hand shake settles after the tap
+        val delay = if (steady) 350L else 0L
+        mainExecutor.execute { Thread { Thread.sleep(delay); mainExecutor.execute { shoot(shots) } }.start() }
+    }
+
+    private fun shoot(remaining: Int) {
+        val capture = imageCapture
+        if (capture == null || remaining <= 0) { busy = false; return }
+        val next = { if (remaining > 1) shoot(remaining - 1) else { busy = false } }
+        val needProcessing = !look.isOriginal || flareGuard || extras != Extras() || ratio != null || frame
         if (!needProcessing) {
             // Nothing to change: save the camera's own JPEG untouched.
             val options = ImageCapture.OutputFileOptions.Builder(
                 context.contentResolver, MediaStore.Images.Media.EXTERNAL_CONTENT_URI, photoValues()).build()
             capture.takePicture(options, mainExecutor, object : ImageCapture.OnImageSavedCallback {
-                override fun onImageSaved(result: ImageCapture.OutputFileResults) { busy = false; message = "Photo saved" }
+                override fun onImageSaved(result: ImageCapture.OutputFileResults) { message = "Photo saved"; next() }
                 override fun onError(e: ImageCaptureException) { busy = false; message = "Photo failed: ${e.message}" }
             })
             return
@@ -205,14 +237,18 @@ class CameraController(private val context: Context) {
                     }
                     val matrices = mutableListOf<android.graphics.ColorMatrix>()
                     if (flareGuard) matrices.add(FlareGuard.matrix(FlareGuard.measure(bitmap), flareStrength))
-                    matrices.add(look.matrix)
-                    val out = FlareGuard.render(bitmap, *matrices.toTypedArray())
+                    matrices.add(look.matrix(strength))
+                    var out = FlareGuard.render(bitmap, *matrices.toTypedArray())
                     bitmap.recycle()
+                    Effects.apply(out, look.spec, extras)
+                    val cropped = Effects.crop(out, ratio)
+                    if (cropped !== out) { out.recycle(); out = cropped }
+                    if (frame) { val framed = Effects.polaroid(out); out.recycle(); out = framed }
                     val uri = save(out)
                     out.recycle()
-                    mainExecutor.execute { busy = false; message = if (uri != null) "Photo saved" else "Could not save photo" }
-                } catch (e: Exception) {
-                    image.close()
+                    mainExecutor.execute { message = if (uri != null) "Photo saved" else "Could not save photo"; next() }
+                } catch (e: Throwable) {
+                    try { image.close() } catch (_: Exception) {}
                     mainExecutor.execute { busy = false; message = "Photo failed: ${e.message}" }
                 }
             }

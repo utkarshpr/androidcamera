@@ -237,7 +237,10 @@ class MainActivity : ComponentActivity() {
                                     override fun onSingleTapUp(e: android.view.MotionEvent): Boolean { cam.tapToFocus(this@apply, e.x, e.y); return true }
                                     override fun onLongPress(e: android.view.MotionEvent) { cam.lockFocus(this@apply, e.x, e.y) }
                                 })
-                                setOnTouchListener { v, e -> detector.onTouchEvent(e); if (e.action == android.view.MotionEvent.ACTION_UP) v.performClick(); true }
+                                val pinch = android.view.ScaleGestureDetector(ctx, object : android.view.ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                                    override fun onScale(d: android.view.ScaleGestureDetector): Boolean { cam.zoomBy(d.scaleFactor); return true }
+                                })
+                                setOnTouchListener { v, e -> pinch.onTouchEvent(e); if (!pinch.isInProgress) detector.onTouchEvent(e); if (e.action == android.view.MotionEvent.ACTION_UP) v.performClick(); true }
                                 previewView = this
                                 cam.bind(owner, this)
                             }
@@ -285,11 +288,13 @@ class MainActivity : ComponentActivity() {
                         LaunchedEffect(m) { kotlinx.coroutines.delay(3200); cam.message = null }
                     }
                     // zoom / lens pill
+                    if (cam.activeLens.isNotEmpty()) Text("${"%.1f".format(cam.zoom)}×  ·  ${cam.activeLens}", color = Gold, fontSize = 10.sp, letterSpacing = 1.sp,
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 66.dp).clip(RoundedCornerShape(50)).background(Color(0x99000000)).padding(horizontal = 10.dp, vertical = 3.dp))
                     Row(Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp).clip(RoundedCornerShape(50)).background(Color(0x99000000))
                         .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(50)).padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        listOf(0.6f, 1f, 3f, 10f).forEach { z ->
+                        listOf(0.6f, 1f, 2f, 3f, 5f, 10f).forEach { z ->
                             val selected = (cam.zoom - z).let { kotlin.math.abs(it) < 0.15f * z }
-                            Box(Modifier.padding(horizontal = 2.dp).size(if (selected) 40.dp else 34.dp)
+                            Box(Modifier.padding(horizontal = 1.dp).size(if (selected) 40.dp else 32.dp)
                                 .background(if (selected) Brush.linearGradient(listOf(GoldLight, Gold)) else Brush.linearGradient(listOf(Color.Transparent, Color.Transparent)), CircleShape)
                                 .clickable { cam.zoomTo(z) }, contentAlignment = Alignment.Center) {
                                 Text(if (z < 1f) ".6" else z.toInt().toString() + if (selected) "×" else "", color = if (selected) Color.Black else Color.White.copy(alpha = 0.85f),

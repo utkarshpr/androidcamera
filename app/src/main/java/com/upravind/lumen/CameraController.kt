@@ -142,6 +142,10 @@ class CameraController(private val context: Context) {
             val previewBuilder = Preview.Builder()
             val aeWatcher = object : android.hardware.camera2.CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(session: android.hardware.camera2.CameraCaptureSession, request: CaptureRequest, result: android.hardware.camera2.TotalCaptureResult) {
+                    result.get(android.hardware.camera2.CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID)?.let { id ->
+                        val name = lensName(id)
+                        if (name.isNotEmpty() && name != activeLens) mainExecutor.execute { activeLens = name }
+                    }
                     result.get(android.hardware.camera2.CaptureResult.SENSOR_SENSITIVITY)?.let { autoIso = it }
                     result.get(android.hardware.camera2.CaptureResult.SENSOR_EXPOSURE_TIME)?.let { autoShutter = it / 1e9 }
                 }
@@ -202,9 +206,37 @@ class CameraController(private val context: Context) {
     }
 
     /** Lens buttons: 0.6× ultra-wide, 1× main, 3× tele, 10× periscope on the S22 Ultra (the phone switches the real lens). */
+    /** Smooth zoom from a pinch gesture. */
+    fun zoomBy(factor: Float) { camera?.cameraControl?.setZoomRatio((zoom * factor).coerceIn(minZoom, maxZoom)) }
+
     fun zoomTo(ratio: Float) {
         val r = ratio.coerceIn(minZoom, maxZoom)
         camera?.cameraControl?.setZoomRatio(r)
+    }
+
+    /** Which physical lens the phone is really using right now (read from the camera's own capture result). */
+    var activeLens by mutableStateOf("")
+    private val lensNames = mutableMapOf<String, String>()
+
+    private fun lensName(id: String): String = lensNames.getOrPut(id) {
+        try {
+            val mgr = context.getSystemService(Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
+            fun eq(cameraId: String): Float {
+                val c = mgr.getCameraCharacteristics(cameraId)
+                val f = c.get(android.hardware.camera2.CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull() ?: return 0f
+                val w = c.get(android.hardware.camera2.CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)?.width ?: return 0f
+                return f * 36f / w                      // 35 mm-equivalent focal length
+            }
+            val logical = mgr.getCameraCharacteristics(Camera2CameraInfo.from(camera!!.cameraInfo).cameraId)
+            val all = logical.physicalCameraIds.associateWith { eq(it) }.filterValues { it > 0f }
+            val mine = all[id] ?: eq(id)
+            val main = all.values.filter { it in 18f..35f }.minOrNull() ?: all.values.minOrNull() ?: 24f
+            when {
+                mine < main * 0.8f -> "ULTRA-WIDE"
+                mine < main * 1.5f -> "MAIN"
+                else -> "TELE ${(mine / main).roundToInt()}×"
+            }
+        } catch (e: Throwable) { "" }
     }
 
     var focusLocked by mutableStateOf(false)

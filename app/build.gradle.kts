@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "com.upravind.lumen"
-    compileSdk = 34
+    compileSdk = 35
     defaultConfig {
         applicationId = "com.upravind.lumen"
         minSdk = 29            // Galaxy S22 Ultra ships Android 12+ (API 31+)
@@ -26,7 +26,7 @@ android {
 }
 
 dependencies {
-    val camerax = "1.3.4"
+    val camerax = "1.5.0"
     implementation("androidx.camera:camera-core:$camerax")
     implementation("androidx.camera:camera-camera2:$camerax")
     implementation("androidx.camera:camera-lifecycle:$camerax")

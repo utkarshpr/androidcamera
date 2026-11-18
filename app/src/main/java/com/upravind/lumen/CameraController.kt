@@ -93,7 +93,23 @@ class CameraController(private val context: Context) {
 
     var frontFacing = false
 
+    private var boundOwner: LifecycleOwner? = null
+    private var boundView: PreviewView? = null
+    var rawMode by mutableStateOf(false)
+    var rawSupported by mutableStateOf(false)
+
+    /** RAW (DNG + JPEG). Uses only preview + photo streams: the phone cannot run RAW together with video / analysis streams. */
+    fun setRaw(on: Boolean) {
+        if (on && !rawSupported) { message = "RAW isn't available on this camera"; return }
+        rawMode = on
+        if (on) { nightMode = false; flareWatch = false } else flareWatch = true
+        val o = boundOwner; val v = boundView
+        if (o != null && v != null) bind(o, v)
+    }
+    private var flareWatch = true
+
     fun bind(owner: LifecycleOwner, view: PreviewView) {
+        boundOwner = owner; boundView = view
         ProcessCameraProvider.getInstance(context).addListener({
             val p = provider ?: ProcessCameraProvider.getInstance(context).get().also { provider = it }
             val previewBuilder = Preview.Builder()
@@ -106,9 +122,9 @@ class CameraController(private val context: Context) {
             // Remember what auto exposure is doing, so MANUAL starts from a correctly exposed picture instead of a black one.
             androidx.camera.camera2.interop.Camera2Interop.Extender(previewBuilder).setSessionCaptureCallback(aeWatcher)
             val preview = previewBuilder.build().also { it.setSurfaceProvider(view.surfaceProvider) }
-            val capture = ImageCapture.Builder()
-                .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-                .build()
+            val captureBuilder = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+            if (rawMode) captureBuilder.setOutputFormat(ImageCapture.OUTPUT_FORMAT_RAW_JPEG)
+            val capture = captureBuilder.build()
             val recorder = Recorder.Builder().setQualitySelector(QualitySelector.from(Quality.UHD, androidx.camera.video.FallbackStrategy.lowerQualityOrHigherThan(Quality.FHD))).build()
             val video = VideoCapture.withOutput(recorder)
             val analysis = ImageAnalysis.Builder()
@@ -118,7 +134,7 @@ class CameraController(private val context: Context) {
                 .build()
             var frame = 0
             analysis.setAnalyzer(analysisExecutor) { img: ImageProxy ->
-                if (++frame % 10 == 0) {
+                if (flareWatch && ++frame % 10 == 0) {
                     val flaring = FlareGuard.measure(img).flaring
                     mainExecutor.execute { if (flareWarning != flaring) flareWarning = flaring }
                 }
@@ -127,7 +143,10 @@ class CameraController(private val context: Context) {
             val selector = if (frontFacing) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
             try {
                 p.unbindAll()
-                camera = p.bindToLifecycle(owner, selector, preview, capture, video, analysis)
+                camera = if (rawMode) p.bindToLifecycle(owner, selector, preview, capture)
+                         else p.bindToLifecycle(owner, selector, preview, capture, video, analysis)
+                rawSupported = ImageCapture.getImageCaptureCapabilities(camera!!.cameraInfo).supportedOutputFormats
+                    .contains(ImageCapture.OUTPUT_FORMAT_RAW_JPEG)
                 imageCapture = capture
                 videoCapture = video
                 camera?.cameraInfo?.zoomState?.observe(owner) { z ->
@@ -137,6 +156,7 @@ class CameraController(private val context: Context) {
                 applyManual()
             } catch (e: Exception) {
                 message = "Camera error: ${e.message}"
+                if (rawMode) { rawMode = false; message = "RAW can't run on this camera setup (${e.message})"; bind(owner, view) }
             }
         }, mainExecutor)
     }
@@ -214,6 +234,23 @@ class CameraController(private val context: Context) {
         val capture = imageCapture
         if (capture == null || remaining <= 0) { busy = false; return }
         val next = { if (remaining > 1) shoot(remaining - 1) else { busy = false } }
+        if (rawMode) {
+            val dng = ImageCapture.OutputFileOptions.Builder(context.contentResolver, MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                ContentValues().apply {
+                    put(MediaStore.Images.Media.DISPLAY_NAME, "Lumen_${stamp()}")
+                    put(MediaStore.Images.Media.MIME_TYPE, "image/x-adobe-dng")
+                    put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Lumen")
+                }).build()
+            val jpg = ImageCapture.OutputFileOptions.Builder(context.contentResolver, MediaStore.Images.Media.EXTERNAL_CONTENT_URI, photoValues()).build()
+            var saved = 0
+            capture.takePicture(dng, jpg, mainExecutor, object : ImageCapture.OnImageSavedCallback {
+                override fun onImageSaved(result: ImageCapture.OutputFileResults) {
+                    if (++saved >= 2) { message = "RAW (DNG) + JPEG saved"; next() }
+                }
+                override fun onError(e: ImageCaptureException) { busy = false; message = "RAW failed: ${e.message}" }
+            })
+            return
+        }
         val needProcessing = !look.isOriginal || flareGuard || extras != Extras() || ratio != null || frame
         if (!needProcessing) {
             // Nothing to change: save the camera's own JPEG untouched.

@@ -94,15 +94,17 @@ class MainActivity : ComponentActivity() {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
             // top bar
             Row(Modifier.fillMaxWidth().horizontalScroll(androidx.compose.foundation.rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Chip(if (videoMode) "VIDEO" else "PHOTO", true) { videoMode = !videoMode }
+                Chip(if (videoMode) "VIDEO" else "PHOTO", true) { videoMode = !videoMode; if (videoMode && cam.rawMode) cam.setRaw(false) }
                 Spacer(Modifier.width(8.dp))
                 Chip("PRESETS", showPresets) { showPresets = !showPresets }
                 Spacer(Modifier.width(8.dp))
                 Chip(if (cam.nightMode) "NIGHT ${cam.nightSeconds}s" else "NIGHT", cam.nightMode) {
-                    if (!cam.nightMode) cam.nightMode = true
+                    if (!cam.nightMode) { if (cam.rawMode) cam.setRaw(false); cam.nightMode = true }
                     else if (cam.nightSeconds < 10) cam.nightSeconds = if (cam.nightSeconds == 3) 6 else 10
                     else { cam.nightMode = false; cam.nightSeconds = 3 }
                 }
+                Spacer(Modifier.width(8.dp))
+                Chip("RAW", cam.rawMode) { cam.setRaw(!cam.rawMode); if (cam.rawMode) videoMode = false }
                 Spacer(Modifier.width(8.dp))
                 Chip("FLARE FIX", flareOn) { flareOn = !flareOn }
                 Spacer(Modifier.width(8.dp))

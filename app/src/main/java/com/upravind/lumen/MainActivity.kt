@@ -11,6 +11,10 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -39,6 +43,7 @@ import kotlin.math.roundToInt
 
 private val Gold = Color(0xFFEBD6AB)
 private val Panel = Color(0xFF16161A)
+private val GoldLight = Color(0xFFF7E9C8)
 
 class MainActivity : ComponentActivity() {
     private var controller: CameraController? = null
@@ -137,53 +142,35 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(flareOn) { cam.flareGuard = flareOn }
         val aspect = ratio?.split(":")?.let { (it[1].toFloat() / it[0].toFloat()) } ?: (3f / 4f)
 
-        Box(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-            // top bar
-            Row(Modifier.fillMaxWidth().horizontalScroll(androidx.compose.foundation.rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Chip(if (videoMode) "VIDEO" else "PHOTO", true) { videoMode = !videoMode; if (videoMode && cam.rawMode) cam.setRaw(false); cam.setVideoMode(videoMode) }
-                Spacer(Modifier.width(8.dp))
-                Chip(if (cam.frontFacing) "SELFIE" else "FLIP", cam.frontFacing) { cam.flipCamera() }
-                Spacer(Modifier.width(8.dp))
-                Chip("PRESETS", showPresets) { showPresets = !showPresets }
-                Spacer(Modifier.width(8.dp))
-                Chip(if (cam.nightMode) "NIGHT ${cam.nightSeconds}s" else "NIGHT", cam.nightMode) {
-                    if (!cam.nightMode) { if (cam.rawMode) cam.setRaw(false); cam.longMode = 0; cam.nightMode = true }
-                    else if (cam.nightSeconds < 10) cam.nightSeconds = if (cam.nightSeconds == 3) 6 else 10
-                    else { cam.nightMode = false; cam.nightSeconds = 3 }
-                }
-                Spacer(Modifier.width(8.dp))
-                Chip("RAW", cam.rawMode) { videoMode = false; cam.videoOnly = false; cam.setRaw(!cam.rawMode) }
-                Spacer(Modifier.width(8.dp))
-                Chip(when (cam.longMode) { 1 -> "LONG ${cam.longSeconds}s"; 2 -> "TRAIL ${cam.longSeconds}s"; else -> "LONG" }, cam.longMode > 0) {
-                    if (cam.longMode == 0) { if (cam.rawMode) cam.setRaw(false); cam.nightMode = false; cam.longMode = 1 }
-                    else if (cam.longMode == 1) cam.longMode = 2
-                    else cam.longMode = 0
-                }
-                if (cam.longMode > 0) { Spacer(Modifier.width(8.dp)); Chip("TIME", false) { cam.longSeconds = when (cam.longSeconds) { 5 -> 10; 10 -> 20; 20 -> 30; else -> 5 } } }
-                Spacer(Modifier.width(8.dp))
-                Chip(if (timer == 0) "TIMER" else "TIMER ${timer}s", timer > 0) { timer = when (timer) { 0 -> 3; 3 -> 10; else -> 0 } }
-                Spacer(Modifier.width(8.dp))
-                Chip("HIST", cam.showHistogram) { cam.showHistogram = !cam.showHistogram }
-                Spacer(Modifier.width(8.dp))
-                Chip("PDF", false) { pdfPicker.launch("image/*") }
-                Spacer(Modifier.width(8.dp))
-                Chip("FLARE FIX", flareOn) { flareOn = !flareOn }
-                Spacer(Modifier.width(8.dp))
-                Chip("MANUAL", showManual) { showManual = !showManual; cam.setManualMode(showManual) }
+        var showTools by remember { mutableStateOf(false) }
+        var showLooks by remember { mutableStateOf(true) }
+        val mode = when {
+            videoMode -> "VIDEO"; cam.rawMode -> "RAW"; cam.longMode == 1 -> "LONG"; cam.longMode == 2 -> "TRAIL"; cam.nightMode -> "NIGHT"; else -> "PHOTO"
+        }
+        fun setMode(m: String) {
+            if (m == mode) {                                               // tapping the active mode again cycles its time
+                if (m == "NIGHT") cam.nightSeconds = when (cam.nightSeconds) { 3 -> 6; 6 -> 10; else -> 3 }
+                if (m == "LONG" || m == "TRAIL") cam.longSeconds = when (cam.longSeconds) { 5 -> 10; 10 -> 20; 20 -> 30; else -> 5 }
+                return
             }
-            if (videoMode) Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Chip(if (cam.videoUhd) "4K" else "1080p", true) { cam.videoUhd = !cam.videoUhd; cam.videoOptionsChanged() }
-                if (cam.supports60) Chip(if (cam.video60) "60 fps" else "30 fps", cam.video60) { cam.video60 = !cam.video60; cam.videoOptionsChanged() }
-                Chip("HDR", cam.videoHdr) { cam.videoHdr = !cam.videoHdr; cam.videoOptionsChanged() }
+            if (videoMode && m != "VIDEO") { videoMode = false; cam.setVideoMode(false) }
+            if (cam.rawMode && m != "RAW") cam.setRaw(false)
+            cam.nightMode = false; cam.longMode = 0
+            when (m) {
+                "NIGHT" -> cam.nightMode = true
+                "LONG" -> cam.longMode = 1
+                "TRAIL" -> cam.longMode = 2
+                "RAW" -> { cam.videoOnly = false; cam.setRaw(true) }
+                "VIDEO" -> { videoMode = true; cam.setVideoMode(true) }
             }
-            if (cam.flareWarning) Text("FLARE — wipe the lens or shade it from the light", color = Color(0xFFFFB454), fontSize = 11.sp, modifier = Modifier.padding(horizontal = 16.dp))
-            cam.nightProgress?.let { Text(it, color = Color(0xFF9EC5FF), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp)) }
-            presetName?.let { Text("PRESET · $it", color = Gold, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 16.dp)) }
+        }
 
-            // viewfinder
-            Box(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
-                Box(Modifier.aspectRatio(aspect, matchHeightConstraintsFirst = false).background(Panel, RoundedCornerShape(22.dp))) {
+        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF0E0E12), Color(0xFF050507))))) {
+        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+            // ---- viewfinder with floating glass controls
+            Box(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.aspectRatio(aspect, matchHeightConstraintsFirst = false).clip(RoundedCornerShape(30.dp)).background(Panel)
+                    .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(30.dp))) {
                     AndroidView(
                         modifier = Modifier.fillMaxSize(),
                         factory = { ctx ->
@@ -200,60 +187,103 @@ class MainActivity : ComponentActivity() {
                         }
                     )
                     GridOverlay(grid)
-                    if (cam.showHistogram) androidx.compose.foundation.Canvas(Modifier.align(Alignment.TopEnd).padding(10.dp).size(width = 120.dp, height = 56.dp)
-                        .background(Color(0x66000000), RoundedCornerShape(8.dp))) {
+                    // top row: tools · status · flip
+                    Row(Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        GlassButton("☰") { showTools = true }
+                        Spacer(Modifier.weight(1f))
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            if (cam.isRecording) GlassPill("● REC", Color(0xFFFF5A5A))
+                            else cam.nightProgress?.let { GlassPill(it, Color(0xFF9EC5FF)) }
+                            if (cam.flareWarning && cam.nightProgress == null && !cam.isRecording) GlassPill("FLARE · wipe the lens or shade it", Color(0xFFFFB454))
+                            presetName?.let { if (cam.nightProgress == null && !cam.isRecording) GlassPill(it, Gold) }
+                        }
+                        Spacer(Modifier.weight(1f))
+                        GlassButton(if (cam.frontFacing) "⟲ S" else "⟲") { cam.flipCamera() }
+                    }
+                    if (cam.showHistogram) androidx.compose.foundation.Canvas(Modifier.align(Alignment.TopEnd).padding(top = 66.dp, end = 12.dp).size(width = 120.dp, height = 56.dp)
+                        .background(Color(0x66000000), RoundedCornerShape(10.dp))) {
                         val bw = size.width / 64f
                         cam.histogram.forEachIndexed { i, v ->
                             drawRect(Color.White.copy(alpha = 0.85f), androidx.compose.ui.geometry.Offset(i * bw, size.height * (1f - v)),
                                 androidx.compose.ui.geometry.Size(bw, size.height * v))
                         }
                     }
-                    countdown?.let { Text("$it", color = Color.White, fontSize = 96.sp, modifier = Modifier.align(Alignment.Center)) }
+                    countdown?.let { Text("$it", color = Color.White, fontSize = 96.sp, fontWeight = FontWeight.Light, modifier = Modifier.align(Alignment.Center)) }
                     cam.message?.let { m ->
                         Text(m, color = Color.White, fontSize = 12.sp,
-                            modifier = Modifier.align(Alignment.TopCenter).padding(10.dp).background(Color(0xAA000000), RoundedCornerShape(12.dp)).padding(horizontal = 12.dp, vertical = 6.dp))
+                            modifier = Modifier.align(Alignment.Center).padding(24.dp).background(Color(0xCC000000), RoundedCornerShape(16.dp)).padding(horizontal = 14.dp, vertical = 8.dp))
                         LaunchedEffect(m) { kotlinx.coroutines.delay(3200); cam.message = null }
                     }
-                }
-            }
-
-            if (showManual) ManualPanel(cam)
-
-            // lens buttons
-            Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                listOf(0.6f, 1f, 3f, 10f).forEach { z ->
-                    val selected = (cam.zoom - z).let { kotlin.math.abs(it) < 0.15f * z }
-                    Box(Modifier.padding(horizontal = 5.dp).size(44.dp).background(if (selected) Gold else Panel, CircleShape).clickable { cam.zoomTo(z) },
-                        contentAlignment = Alignment.Center) {
-                        Text(if (z < 1f) ".6" else z.toInt().toString() + "×", color = if (selected) Color.Black else Color.White, fontSize = 13.sp)
+                    // zoom / lens pill
+                    Row(Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp).clip(RoundedCornerShape(50)).background(Color(0x99000000))
+                        .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(50)).padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        listOf(0.6f, 1f, 3f, 10f).forEach { z ->
+                            val selected = (cam.zoom - z).let { kotlin.math.abs(it) < 0.15f * z }
+                            Box(Modifier.padding(horizontal = 2.dp).size(if (selected) 40.dp else 34.dp)
+                                .background(if (selected) Brush.linearGradient(listOf(GoldLight, Gold)) else Brush.linearGradient(listOf(Color.Transparent, Color.Transparent)), CircleShape)
+                                .clickable { cam.zoomTo(z) }, contentAlignment = Alignment.Center) {
+                                Text(if (z < 1f) ".6" else z.toInt().toString() + if (selected) "×" else "", color = if (selected) Color.Black else Color.White.copy(alpha = 0.85f),
+                                    fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
                     }
                 }
-                Spacer(Modifier.width(10.dp))
-                Chip("GRID", grid > 0) { grid = (grid + 1) % 5 }
             }
 
-            // looks
-            LazyRow(Modifier.fillMaxWidth().padding(top = 10.dp), contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // ---- looks strip
+            if (showLooks) LazyRow(Modifier.fillMaxWidth().padding(top = 4.dp), contentPadding = PaddingValues(horizontal = 14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 items(Looks.all) { l ->
-                    Row(Modifier.background(if (l == look) Gold else Panel, RoundedCornerShape(50)).clickable { look = l; strength = 1f; presetName = null }
-                        .padding(horizontal = 12.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(9.dp).background(Color(l.spec.swatch), CircleShape))
-                        Spacer(Modifier.width(6.dp))
-                        Text(l.name, fontSize = 11.sp, color = if (l == look) Color.Black else Color.White.copy(alpha = 0.85f))
+                    val on = l == look
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { look = l; strength = 1f; presetName = null }) {
+                        Box(Modifier.size(46.dp).clip(CircleShape).background(Color(l.spec.swatch))
+                            .border(if (on) 2.5.dp else 1.dp, if (on) Gold else Color.White.copy(alpha = 0.15f), CircleShape))
+                        Spacer(Modifier.height(3.dp))
+                        Text(l.name.lowercase().replaceFirstChar { it.uppercase() }, fontSize = 9.sp, maxLines = 1,
+                            color = if (on) Gold else Color.White.copy(alpha = 0.55f), modifier = Modifier.widthIn(max = 62.dp))
                     }
                 }
             }
-            if (!look.isOriginal) Slider01("LOOK STRENGTH ${(strength * 100).roundToInt()}%", strength) { strength = it }.let { }
+            if (!look.isOriginal && showLooks) Row(Modifier.padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("${(strength * 100).roundToInt()}%", color = Gold, fontSize = 11.sp, modifier = Modifier.width(38.dp))
+                Slider(value = strength, onValueChange = { strength = it }, modifier = Modifier.height(24.dp),
+                    colors = SliderDefaults.colors(thumbColor = Gold, activeTrackColor = Gold, inactiveTrackColor = Color.White.copy(alpha = 0.15f)))
+            }
 
-            // shutter
-            Box(Modifier.fillMaxWidth().padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
+            // ---- mode selector
+            Row(Modifier.fillMaxWidth().horizontalScroll(androidx.compose.foundation.rememberScrollState()).padding(top = 8.dp), horizontalArrangement = Arrangement.Center) {
+                Spacer(Modifier.width(24.dp))
+                listOf("PHOTO", "NIGHT", "RAW", "LONG", "TRAIL", "VIDEO").forEach { m ->
+                    val on = m == mode
+                    val label = if (on && m == "NIGHT") "NIGHT ${cam.nightSeconds}s" else if (on && (m == "LONG" || m == "TRAIL")) "$m ${cam.longSeconds}s" else m
+                    Text(label, fontSize = 12.sp, fontWeight = if (on) FontWeight.Bold else FontWeight.Normal, letterSpacing = 1.2.sp,
+                        color = if (on) Gold else Color.White.copy(alpha = 0.5f),
+                        modifier = Modifier.clickable { setMode(m) }.padding(horizontal = 14.dp, vertical = 6.dp))
+                }
+                Spacer(Modifier.width(24.dp))
+            }
+
+            // ---- bottom bar: presets · shutter · looks toggle
+            Row(Modifier.fillMaxWidth().padding(horizontal = 26.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                    GlassTile("PRESETS", showPresets) { showPresets = !showPresets }
+                }
                 val recording = cam.isRecording
-                Box(Modifier.size(82.dp).background(Panel, CircleShape).clickable { shutter() }, contentAlignment = Alignment.Center) {
-                    Box(Modifier.size(if (recording) 30.dp else 62.dp)
-                        .background(if (videoMode) Color(0xFFE53935) else Gold, if (recording) RoundedCornerShape(8.dp) else CircleShape))
+                Box(Modifier.size(86.dp).border(3.dp, Brush.linearGradient(listOf(GoldLight, Gold)), CircleShape).padding(7.dp)
+                    .clip(CircleShape).background(if (videoMode) Color(0xFFE53935) else Color(0xFFF4EBDD)).clickable { shutter() },
+                    contentAlignment = Alignment.Center) {
+                    if (recording) Box(Modifier.size(26.dp).background(Color.White, RoundedCornerShape(6.dp)))
+                }
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+                    GlassTile(if (showLooks) "LOOKS ▾" else "LOOKS ▴", false) { showLooks = !showLooks }
                 }
             }
         }
+
+        if (showTools) ToolsSheet(
+            cam = cam, flareOn = flareOn, onFlare = { flareOn = !flareOn }, showManual = showManual,
+            onManual = { showManual = !showManual; cam.setManualMode(showManual) }, grid = grid, onGrid = { grid = (grid + 1) % 5 },
+            timer = timer, onTimer = { timer = when (timer) { 0 -> 3; 3 -> 10; else -> 0 } },
+            onPdf = { showTools = false; pdfPicker.launch("image/*") }, videoMode = videoMode, onClose = { showTools = false })
 
         if (pdfPicked.isNotEmpty()) androidx.compose.material3.AlertDialog(
             onDismissRequest = { pdfPicked = emptyList() },
@@ -283,6 +313,77 @@ class MainActivity : ComponentActivity() {
             cam.message = if (note != null) "$tip\n($note)" else tip
             showPresets = false
         }
+        }
+    }
+
+    @Composable
+    private fun GlassButton(text: String, onClick: () -> Unit) {
+        Box(Modifier.size(42.dp).clip(CircleShape).background(Color(0x88000000)).border(1.dp, Color.White.copy(alpha = 0.14f), CircleShape).clickable(onClick = onClick),
+            contentAlignment = Alignment.Center) { Text(text, color = Color.White, fontSize = 16.sp) }
+    }
+
+    @Composable
+    private fun GlassPill(text: String, color: Color) {
+        Text(text, color = color, fontSize = 11.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+            modifier = Modifier.padding(bottom = 4.dp).clip(RoundedCornerShape(50)).background(Color(0x99000000))
+                .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(50)).padding(horizontal = 12.dp, vertical = 5.dp))
+    }
+
+    @Composable
+    private fun GlassTile(text: String, on: Boolean, onClick: () -> Unit) {
+        Text(text, color = if (on) Color.Black else Color.White.copy(alpha = 0.85f), fontSize = 11.sp, letterSpacing = 1.sp, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.clip(RoundedCornerShape(16.dp)).background(if (on) Brush.linearGradient(listOf(GoldLight, Gold)) else Brush.linearGradient(listOf(Color(0xFF1B1B21), Color(0xFF131317))))
+                .border(1.dp, Color.White.copy(alpha = if (on) 0f else 0.10f), RoundedCornerShape(16.dp)).clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 12.dp))
+    }
+
+    @Composable
+    private fun ToolTile(title: String, value: String, on: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+        Column(modifier.clip(RoundedCornerShape(18.dp))
+            .background(if (on) Brush.linearGradient(listOf(GoldLight, Gold)) else Brush.linearGradient(listOf(Color(0xFF1C1C22), Color(0xFF131317))))
+            .border(1.dp, Color.White.copy(alpha = if (on) 0f else 0.10f), RoundedCornerShape(18.dp)).clickable(onClick = onClick).padding(14.dp)) {
+            Text(title, color = if (on) Color.Black else Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp)
+            Spacer(Modifier.height(2.dp))
+            Text(value, color = if (on) Color.Black.copy(alpha = 0.65f) else Color.White.copy(alpha = 0.5f), fontSize = 10.sp)
+        }
+    }
+
+    @Composable
+    private fun ToolsSheet(cam: CameraController, flareOn: Boolean, onFlare: () -> Unit, showManual: Boolean, onManual: () -> Unit, grid: Int, onGrid: () -> Unit,
+                           timer: Int, onTimer: () -> Unit, onPdf: () -> Unit, videoMode: Boolean, onClose: () -> Unit) {
+        Box(Modifier.fillMaxSize().background(Color(0x99000000)).clickable(onClick = onClose)) {
+            Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
+                .background(Color(0xFF0F0F13)).border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
+                .clickable(enabled = false) {}.navigationBarsPadding().padding(18.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("TOOLS", color = Gold, fontSize = 13.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.weight(1f))
+                    GlassTile("DONE", false, onClose)
+                }
+                Spacer(Modifier.height(14.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    ToolTile("FLARE FIX", if (flareOn) "on" else "off", flareOn, Modifier.weight(1f), onFlare)
+                    ToolTile("MANUAL", if (showManual) "ISO · shutter · focus" else "auto", showManual, Modifier.weight(1f), onManual)
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    ToolTile("GRID", listOf("off", "thirds", "centre", "columns", "diagonal")[grid], grid > 0, Modifier.weight(1f), onGrid)
+                    ToolTile("TIMER", if (timer == 0) "off" else "${timer} seconds", timer > 0, Modifier.weight(1f), onTimer)
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    ToolTile("HISTOGRAM", if (cam.showHistogram) "on" else "off", cam.showHistogram, Modifier.weight(1f)) { cam.showHistogram = !cam.showHistogram }
+                    ToolTile("PHOTOS → PDF", "1, 2 or 4 per page", false, Modifier.weight(1f), onPdf)
+                }
+                if (videoMode) {
+                    Spacer(Modifier.height(10.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        ToolTile("RESOLUTION", if (cam.videoUhd) "4K" else "1080p", cam.videoUhd, Modifier.weight(1f)) { cam.videoUhd = !cam.videoUhd; cam.videoOptionsChanged() }
+                        ToolTile("HDR", if (cam.videoHdr) "HLG 10-bit" else "off", cam.videoHdr, Modifier.weight(1f)) { cam.videoHdr = !cam.videoHdr; cam.videoOptionsChanged() }
+                        if (cam.supports60) ToolTile("FPS", if (cam.video60) "60" else "30", cam.video60, Modifier.weight(1f)) { cam.video60 = !cam.video60; cam.videoOptionsChanged() }
+                    }
+                }
+                if (showManual) { Spacer(Modifier.height(10.dp)); ManualPanel(cam) }
+            }
         }
     }
 

@@ -7,6 +7,8 @@
 
     <application
         android:label="Lumen"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@style/Theme.Lumen"
         android:allowBackup="true"
         android:largeHeap="true">

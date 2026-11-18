@@ -12,6 +12,7 @@ Manual camera built with Kotlin, Jetpack Compose and CameraX.
   tips. Presets set look, strength, grid, crop ratio, burst, steady wait, manual ISO/shutter and exposure bias.
   Presets that need STARS / NIGHT / PANO / TRAIL modes apply their look and say the mode isn't available yet.
 - `tools/gen_from_ios.py` regenerates `LookData.kt` and `PresetData.kt` from the iPhone sources
+- **Night mode**: shoots a burst for 3 / 6 / 10 s, aligns the frames and averages them (cleaner, brighter low-light photos)
 - **Flare Fix**: removes the milky veil caused by lens flare, plus a live "flare detected" warning
 
 ## About lens flare
@@ -24,4 +25,4 @@ Open this folder in Android Studio and press Run, or:
     gradle wrapper && ./gradlew installDebug      # with the phone connected, USB debugging on
 
 ## Not yet included
-RAW, 50 MP, Night mode, star map, panorama, portrait blur, PDF export.
+RAW, 50 MP, star map, panorama, portrait blur, PDF export.

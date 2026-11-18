@@ -195,7 +195,8 @@ class CameraController(private val context: Context) {
         val step = camera?.cameraInfo?.exposureState?.exposureCompensationStep?.toFloat() ?: 0f
         exposureIndex = if (step > 0f) (p.bias / step).roundToInt() else 0
         applyManual()
-        return if (p.mode != "PHOTO") "${p.mode} mode isn't on Android yet — using a normal photo" else null
+        nightMode = p.mode == "NIGHT"
+        return if (p.mode != "PHOTO" && p.mode != "NIGHT") "${p.mode} mode isn't on Android yet — using a normal photo" else null
     }
 
     // ------------------------------------------------------------------ photo
@@ -235,15 +236,7 @@ class CameraController(private val context: Context) {
                         val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, m, true)
                         bitmap.recycle(); bitmap = rotated
                     }
-                    val matrices = mutableListOf<android.graphics.ColorMatrix>()
-                    if (flareGuard) matrices.add(FlareGuard.matrix(FlareGuard.measure(bitmap), flareStrength))
-                    matrices.add(look.matrix(strength))
-                    var out = FlareGuard.render(bitmap, *matrices.toTypedArray())
-                    bitmap.recycle()
-                    Effects.apply(out, look.spec, extras)
-                    val cropped = Effects.crop(out, ratio)
-                    if (cropped !== out) { out.recycle(); out = cropped }
-                    if (frame) { val framed = Effects.polaroid(out); out.recycle(); out = framed }
+                    val out = finish(bitmap, null)
                     val uri = save(out)
                     out.recycle()
                     mainExecutor.execute { message = if (uri != null) "Photo saved" else "Could not save photo"; next() }
@@ -256,6 +249,102 @@ class CameraController(private val context: Context) {
                 mainExecutor.execute { busy = false; message = "Photo failed: ${e.message}" }
             }
         })
+    }
+
+    /** Look, flare fix, effects, crop and frame, in that order, on an upright bitmap. Recycles [src]. */
+    private fun finish(src: Bitmap, tone: android.graphics.ColorMatrix?): Bitmap {
+        val matrices = mutableListOf<android.graphics.ColorMatrix>()
+        if (flareGuard) matrices.add(FlareGuard.matrix(FlareGuard.measure(src), flareStrength))
+        if (tone != null) matrices.add(tone)
+        matrices.add(look.matrix(strength))
+        var out = FlareGuard.render(src, *matrices.toTypedArray())
+        src.recycle()
+        Effects.apply(out, look.spec, extras)
+        val cropped = Effects.crop(out, ratio)
+        if (cropped !== out) { out.recycle(); out = cropped }
+        if (frame) { val framed = Effects.polaroid(out); out.recycle(); out = framed }
+        return out
+    }
+
+    // ------------------------------------------------------------------ night mode
+
+    var nightMode by mutableStateOf(false)
+    var nightSeconds by mutableStateOf(3)
+    var nightProgress by mutableStateOf<String?>(null)
+
+    /**
+     * Night mode: shoots as many frames as fit in [nightSeconds], lines them up (hand shake) and averages them.
+     * Averaging N frames cuts noise by about sqrt(N), so the picture can be brightened without grain.
+     */
+    fun takeNight() {
+        val capture = imageCapture ?: return
+        if (busy) return
+        busy = true
+        val cam = camera
+        val ev = cam?.cameraInfo?.exposureState
+        val oldIndex = exposureIndex
+        if (!manual && ev != null && ev.isExposureCompensationSupported) {
+            val step = ev.exposureCompensationStep.toFloat().coerceAtLeast(0.01f)
+            cam.cameraControl.setExposureCompensationIndex((1.0f / step).roundToInt().coerceIn(ev.exposureCompensationRange.lower, ev.exposureCompensationRange.upper))
+        }
+        val startTime = System.currentTimeMillis()
+        val maxFrames = 16
+        val stacker = NightStacker()
+        var rotation = 0
+
+        fun finishStack() {
+            processExecutor.execute {
+                try {
+                    var result = stacker.result()
+                    if (rotation != 0) {
+                        val m = Matrix().apply { postRotate(rotation.toFloat()) }
+                        val rotated = Bitmap.createBitmap(result, 0, 0, result.width, result.height, m, true)
+                        result.recycle(); result = rotated
+                    }
+                    // night tone: lift the shadows a little and keep colour
+                    val tone = android.graphics.ColorMatrix().apply {
+                        setSaturation(1.1f)
+                        postConcat(android.graphics.ColorMatrix(floatArrayOf(
+                            1.12f, 0f, 0f, 0f, 14f, 0f, 1.12f, 0f, 0f, 14f, 0f, 0f, 1.12f, 0f, 14f, 0f, 0f, 0f, 1f, 0f)))
+                    }
+                    val out = finish(result, tone)
+                    val uri = save(out)
+                    out.recycle()
+                    mainExecutor.execute { nightProgress = null; busy = false; message = if (uri != null) "Night photo saved (${stacker.frames} frames)" else "Could not save night photo" }
+                } catch (e: Throwable) {
+                    mainExecutor.execute { nightProgress = null; busy = false; message = "Night failed: ${e.message}" }
+                } finally {
+                    mainExecutor.execute { if (!manual) camera?.cameraControl?.setExposureCompensationIndex(oldIndex) }
+                }
+            }
+        }
+
+        fun next() {
+            capture.takePicture(processExecutor, object : ImageCapture.OnImageCapturedCallback() {
+                override fun onCaptureSuccess(image: ImageProxy) {
+                    try {
+                        if (stacker.frames == 0) rotation = image.imageInfo.rotationDegrees
+                        val bmp = image.toBitmap()
+                        image.close()
+                        stacker.add(bmp)
+                        bmp.recycle()
+                        mainExecutor.execute { nightProgress = "NIGHT · hold still · ${stacker.frames} frames" }
+                    } catch (e: Throwable) {
+                        try { image.close() } catch (_: Exception) {}
+                        mainExecutor.execute { nightProgress = null; busy = false; message = "Night failed: ${e.message}" }
+                        return
+                    }
+                    val elapsed = System.currentTimeMillis() - startTime
+                    if (elapsed < nightSeconds * 1000L && stacker.frames < maxFrames) next() else finishStack()
+                }
+                override fun onError(e: ImageCaptureException) {
+                    if (stacker.frames >= 2) finishStack()
+                    else mainExecutor.execute { nightProgress = null; busy = false; message = "Night failed: ${e.message}" }
+                }
+            })
+        }
+        nightProgress = "NIGHT · hold still"
+        next()
     }
 
     private fun photoValues() = ContentValues().apply {

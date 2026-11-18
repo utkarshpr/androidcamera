@@ -8,7 +8,8 @@
     <application
         android:label="Lumen"
         android:theme="@style/Theme.Lumen"
-        android:allowBackup="true">
+        android:allowBackup="true"
+        android:largeHeap="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"

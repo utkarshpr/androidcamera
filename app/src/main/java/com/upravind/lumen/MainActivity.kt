@@ -12,6 +12,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyColumn
@@ -92,16 +93,23 @@ class MainActivity : ComponentActivity() {
         Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
             // top bar
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().horizontalScroll(androidx.compose.foundation.rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Chip(if (videoMode) "VIDEO" else "PHOTO", true) { videoMode = !videoMode }
                 Spacer(Modifier.width(8.dp))
                 Chip("PRESETS", showPresets) { showPresets = !showPresets }
-                Spacer(Modifier.weight(1f))
+                Spacer(Modifier.width(8.dp))
+                Chip(if (cam.nightMode) "NIGHT ${cam.nightSeconds}s" else "NIGHT", cam.nightMode) {
+                    if (!cam.nightMode) cam.nightMode = true
+                    else if (cam.nightSeconds < 10) cam.nightSeconds = if (cam.nightSeconds == 3) 6 else 10
+                    else { cam.nightMode = false; cam.nightSeconds = 3 }
+                }
+                Spacer(Modifier.width(8.dp))
                 Chip("FLARE FIX", flareOn) { flareOn = !flareOn }
                 Spacer(Modifier.width(8.dp))
                 Chip("MANUAL", showManual) { showManual = !showManual; cam.setManualMode(showManual) }
             }
             if (cam.flareWarning) Text("FLARE — wipe the lens or shade it from the light", color = Color(0xFFFFB454), fontSize = 11.sp, modifier = Modifier.padding(horizontal = 16.dp))
+            cam.nightProgress?.let { Text(it, color = Color(0xFF9EC5FF), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp)) }
             presetName?.let { Text("PRESET · $it", color = Gold, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 16.dp)) }
 
             // viewfinder
@@ -163,7 +171,7 @@ class MainActivity : ComponentActivity() {
             Box(Modifier.fillMaxWidth().padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
                 val recording = cam.isRecording
                 Box(Modifier.size(82.dp).background(Panel, CircleShape).clickable(enabled = !cam.busy) {
-                    if (videoMode) cam.toggleRecording() else cam.takePhoto()
+                    if (videoMode) cam.toggleRecording() else if (cam.nightMode) cam.takeNight() else cam.takePhoto()
                 }, contentAlignment = Alignment.Center) {
                     Box(Modifier.size(if (recording) 30.dp else 62.dp)
                         .background(if (videoMode) Color(0xFFE53935) else Gold, if (recording) RoundedCornerShape(8.dp) else CircleShape))
@@ -260,7 +268,7 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun Chip(text: String, on: Boolean, onClick: () -> Unit) {
-        Text(text, fontSize = 11.sp, color = if (on) Color.Black else Color.White.copy(alpha = 0.85f),
+        Text(text, fontSize = 11.sp, maxLines = 1, softWrap = false, color = if (on) Color.Black else Color.White.copy(alpha = 0.85f),
             modifier = Modifier.background(if (on) Gold else Panel, RoundedCornerShape(50)).clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 7.dp))
     }
 }
